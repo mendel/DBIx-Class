@@ -43,7 +43,7 @@ sub _register_columns {
   foreach my $name (@cols) {
     $class->set_field_column_name($name => $name);
     $class->_columns->{$name}{field} = $class->get_field($name);
-  }  
+  }
 }
 
 sub _mk_column_accessors {

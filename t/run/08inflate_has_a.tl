@@ -1,15 +1,9 @@
-use Test::More;
+sub run_tests {
 
-BEGIN {
-    eval { require DateTime };
-    plan skip_all => "Need DateTime for inflation tests" if $@;
+eval { require DateTime };
+plan skip_all => "Need DateTime for inflation tests" if $@;
 
-    plan tests => 7;
-
-    use lib qw(t/lib);
-
-    use_ok('DBICTest');
-}
+plan tests => 6;
 
 DBICTest::CD->load_components(qw/CDBICompat::HasA/);
 
@@ -54,3 +48,6 @@ $cd->update;
 ($cd) = DBICTest::CD->search( year => $now->year );
 is( $cd->year->year, $now->year, 'deflate ok' );
 
+}
+
+1;

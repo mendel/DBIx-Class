@@ -6,14 +6,14 @@ use warnings;
 use vars qw($VERSION);
 use base qw/DBIx::Class::Componentised/;
 
-$VERSION = '0.02';
+$VERSION = '0.03001';
 
 
 1;
 
 =head1 NAME 
 
-DBIx::Class - Because the brain is a terrible thing to waste.
+DBIx::Class - Extensible and flexible object <-> relational mapper.
 
 =head1 SYNOPSIS
 
@@ -61,7 +61,7 @@ yo load the approriate PK::Auto subclass - e.g.
 interface)
 
 If you fancy playing around with DBIx::Class from scratch, then read the docs
-for ::Table and ::Relationship,
+for DBIx::Class::Table, ::Row, ::Schema, ::DB and ::Relationship,
 
   use base qw/DBIx::Class/;
   __PACKAGE__->load_components(qw/Core DB/);

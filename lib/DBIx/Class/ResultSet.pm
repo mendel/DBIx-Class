@@ -195,44 +195,44 @@ call it as C<search(undef, \%attrs)>.
 
 sub search {
   my $self = shift;
-
-  my $rs;
-  if( @_ ) {
     
-    my $attrs = { %{$self->{attrs}} };
-    my $having = delete $attrs->{having};
-    $attrs = { %$attrs, %{ pop(@_) } } if @_ > 1 and ref $_[$#_] eq 'HASH';
+  my $attrs = { %{$self->{attrs}} };
+  my $having = delete $attrs->{having};
+  $attrs = { %$attrs, %{ pop(@_) } } if @_ > 1 and ref $_[$#_] eq 'HASH';
 
-    my $where = (@_
-                  ? ((@_ == 1 || ref $_[0] eq "HASH")
-                      ? shift
-                      : ((@_ % 2)
-                          ? $self->throw_exception(
-                              "Odd number of arguments to search")
-                          : {@_}))
-                  : undef());
-    if (defined $where) {
-      $attrs->{where} = (defined $attrs->{where}
-                ? { '-and' =>
-                    [ map { ref $_ eq 'ARRAY' ? [ -or => $_ ] : $_ }
-                        $where, $attrs->{where} ] }
-                : $where);
-    }
-
-    if (defined $having) {
-      $attrs->{having} = (defined $attrs->{having}
-                ? { '-and' =>
-                    [ map { ref $_ eq 'ARRAY' ? [ -or => $_ ] : $_ }
-                        $having, $attrs->{having} ] }
-                : $having);
-    }
-
-    $rs = (ref $self)->new($self->result_source, $attrs);
+  my $where = (@_
+                ? ((@_ == 1 || ref $_[0] eq "HASH")
+                    ? shift
+                    : ((@_ % 2)
+                        ? $self->throw_exception(
+                            "Odd number of arguments to search")
+                        : {@_}))
+                : undef());
+  if (defined $where) {
+    $attrs->{where} = (defined $attrs->{where}
+              ? { '-and' =>
+                  [ map { ref $_ eq 'ARRAY' ? [ -or => $_ ] : $_ }
+                      $where, $attrs->{where} ] }
+              : $where);
   }
-  else {
-    $rs = $self;
-    $rs->reset;
+
+  if (defined $having) {
+    $attrs->{having} = (defined $attrs->{having}
+              ? { '-and' =>
+                  [ map { ref $_ eq 'ARRAY' ? [ -or => $_ ] : $_ }
+                      $having, $attrs->{having} ] }
+              : $having);
   }
+
+  my $rs = (ref $self)->new($self->result_source, $attrs);
+
+  unless (@_) { # no search, effectively just a clone
+    my $rows = $self->get_cache;
+    if ($rows) {
+      $rs->set_cache($rows);
+    }
+  }
+  
   return (wantarray ? $rs->all : $rs);
 }
 
@@ -464,12 +464,13 @@ three records, call:
 
 sub slice {
   my ($self, $min, $max) = @_;
-  my $attrs = { %{ $self->{attrs} || {} } };
-  $attrs->{offset} ||= 0;
+  my $attrs = {}; # = { %{ $self->{attrs} || {} } };
+  $attrs->{offset} = $self->{attrs}{offset} || 0;
   $attrs->{offset} += $min;
   $attrs->{rows} = ($max ? ($max - $min + 1) : 1);
-  my $slice = (ref $self)->new($self->result_source, $attrs);
-  return (wantarray ? $slice->all : $slice);
+  return $self->search(undef(), $attrs);
+  #my $slice = (ref $self)->new($self->result_source, $attrs);
+  #return (wantarray ? $slice->all : $slice);
 }
 
 =head2 next
@@ -491,13 +492,17 @@ Can be used to efficiently iterate over records in the resultset:
     print $cd->title;
   }
 
+Note that you need to store the resultset object, and call C<next> on it. 
+Calling C<< resultset('Table')->next >> repeatedly will always return the
+first record from the resultset.
+
 =cut
 
 sub next {
   my ($self) = @_;
-  if (@{$self->{all_cache} || []}) {
+  if (my $cache = $self->get_cache) {
     $self->{all_cache_position} ||= 0;
-    return $self->{all_cache}->[$self->{all_cache_position}++];
+    return $cache->[$self->{all_cache_position}++];
   }
   if ($self->{attrs}{cache}) {
     $self->{all_cache_position} = 1;
@@ -587,9 +592,9 @@ sub _collapse_result {
       last unless (@raw = $self->cursor->next);
       $row = $self->{stashed_row} = \@raw;
       $tree = $self->_collapse_result($as, $row, $c_prefix);
-      #warn Data::Dumper::Dumper($tree, $row);
     }
-    @$target = @final;
+    @$target = (@final ? @final : [ {}, {} ]);
+      # single empty result to indicate an empty prefetched has_many
   }
 
   return $info;
@@ -636,7 +641,7 @@ clause.
 sub count {
   my $self = shift;
   return $self->search(@_)->count if @_ and defined $_[0];
-  return scalar @{ $self->get_cache } if @{ $self->get_cache };
+  return scalar @{ $self->get_cache } if $self->get_cache;
 
   my $count = $self->_count;
   return 0 unless $count;
@@ -713,7 +718,7 @@ is returned in list context.
 
 sub all {
   my ($self) = @_;
-  return @{ $self->get_cache } if @{ $self->get_cache };
+  return @{ $self->get_cache } if $self->get_cache;
 
   my @obj;
 
@@ -778,6 +783,71 @@ sub first {
   return $_[0]->reset->next;
 }
 
+# _cond_for_update_delete
+#
+# update/delete require the condition to be modified to handle
+# the differing SQL syntax available.  This transforms the $self->{cond}
+# appropriately, returning the new condition.
+
+sub _cond_for_update_delete {
+  my ($self) = @_;
+  my $cond = {};
+
+  if (!ref($self->{cond})) {
+    # No-op. No condition, we're updating/deleting everything
+  }
+  elsif (ref $self->{cond} eq 'ARRAY') {
+    $cond = [
+      map {
+        my %hash;
+        foreach my $key (keys %{$_}) {
+          $key =~ /([^.]+)$/;
+          $hash{$1} = $_->{$key};
+        }
+        \%hash;
+      } @{$self->{cond}}
+    ];
+  }
+  elsif (ref $self->{cond} eq 'HASH') {
+    if ((keys %{$self->{cond}})[0] eq '-and') {
+      $cond->{-and} = [];
+
+      my @cond = @{$self->{cond}{-and}};
+      for (my $i = 0; $i < @cond - 1; $i++) {
+        my $entry = $cond[$i];
+
+        my %hash;
+        if (ref $entry eq 'HASH') {
+          foreach my $key (keys %{$entry}) {
+            $key =~ /([^.]+)$/;
+            $hash{$1} = $entry->{$key};
+          }
+        }
+        else {
+          $entry =~ /([^.]+)$/;
+          $hash{$entry} = $cond[++$i];
+        }
+
+        push @{$cond->{-and}}, \%hash;
+      }
+    }
+    else {
+      foreach my $key (keys %{$self->{cond}}) {
+        $key =~ /([^.]+)$/;
+        $cond->{$1} = $self->{cond}{$key};
+      }
+    }
+  }
+  else {
+    $self->throw_exception(
+      "Can't update/delete on resultset with condition unless hash or array"
+    );
+  }
+
+  return $cond;
+}
+
+
 =head2 update
 
 =over 4
@@ -798,8 +868,11 @@ sub update {
   my ($self, $values) = @_;
   $self->throw_exception("Values for update must be a hash")
     unless ref $values eq 'HASH';
+
+  my $cond = $self->_cond_for_update_delete;
+
   return $self->result_source->storage->update(
-    $self->result_source->from, $values, $self->{cond}
+    $self->result_source->from, $values, $cond
   );
 }
 
@@ -848,43 +921,9 @@ sub delete {
   my ($self) = @_;
   my $del = {};
 
-  if (!ref($self->{cond})) {
+  my $cond = $self->_cond_for_update_delete;
 
-    # No-op. No condition, we're deleting everything
-
-  } elsif (ref $self->{cond} eq 'ARRAY') {
-
-    $del = [ map { my %hash;
-      foreach my $key (keys %{$_}) {
-        $key =~ /([^.]+)$/;
-        $hash{$1} = $_->{$key};
-      }; \%hash; } @{$self->{cond}} ];
-
-  } elsif (ref $self->{cond} eq 'HASH') {
-
-    if ((keys %{$self->{cond}})[0] eq '-and') {
-
-      $del->{-and} = [ map { my %hash;
-        foreach my $key (keys %{$_}) {
-          $key =~ /([^.]+)$/;
-          $hash{$1} = $_->{$key};
-        }; \%hash; } @{$self->{cond}{-and}} ];
-
-    } else {
-
-      foreach my $key (keys %{$self->{cond}}) {
-        $key =~ /([^.]+)$/;
-        $del->{$1} = $self->{cond}{$key};
-      }
-    }
-
-  } else {
-    $self->throw_exception(
-      "Can't delete on resultset with condition unless hash or array"
-    );
-  }
-
-  $self->result_source->storage->delete($self->result_source->from, $del);
+  $self->result_source->storage->delete($self->result_source->from, $cond);
   return 1;
 }
 
@@ -1120,8 +1159,7 @@ sub update_or_create {
   if (@unique_hashes) {
     my $row = $self->single(\@unique_hashes);
     if (defined $row) {
-      $row->set_columns($hash);
-      $row->update;
+      $row->update($hash);
       return $row;
     }
   }
@@ -1144,7 +1182,7 @@ Gets the contents of the cache for the resultset, if the cache is set.
 =cut
 
 sub get_cache {
-  shift->{all_cache} || [];
+  shift->{all_cache};
 }
 
 =head2 set_cache
@@ -1167,13 +1205,7 @@ than re-querying the database even if the cache attr is not set.
 sub set_cache {
   my ( $self, $data ) = @_;
   $self->throw_exception("set_cache requires an arrayref")
-    if ref $data ne 'ARRAY';
-  my $result_class = $self->result_class;
-  foreach( @$data ) {
-    $self->throw_exception(
-      "cannot cache object of type '$_', expected '$result_class'"
-    ) if ref $_ ne $result_class;
-  }
+    if defined($data) && (ref $data ne 'ARRAY');
   $self->{all_cache} = $data;
 }
 
@@ -1192,7 +1224,7 @@ Clears the cache for the resultset.
 =cut
 
 sub clear_cache {
-  shift->set_cache([]);
+  shift->set_cache(undef);
 }
 
 =head2 related_resultset
@@ -1580,6 +1612,20 @@ rows per page if the page attribute or method is used.
 A arrayref of columns to group by. Can include columns of joined tables.
 
   group_by => [qw/ column1 column2 ... /]
+
+=head2 having
+
+=over 4
+
+=item Value: $condition
+
+=back
+
+HAVING is a select statement attribute that is applied between GROUP BY and
+ORDER BY. It is applied to the after the grouping calculations have been
+done. 
+
+  having => { 'count(employee)' => { '>=', 100 } }
 
 =head2 distinct
 

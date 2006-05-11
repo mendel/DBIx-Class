@@ -3,7 +3,7 @@ my $schema = shift;
 
 use strict;
 use warnings;  
-plan tests => 20;
+plan tests => 26;
 
 # has_a test
 my $cd = $schema->resultset("CD")->find(4);
@@ -50,11 +50,16 @@ my $track = $schema->resultset("Track")->create( {
 } );
 $track->set_from_related( cd => $cd );
 
-if ($INC{'DBICTest/HelperRels.pm'}) { # except inflated object
+if ($INC{'DBICTest/HelperRels.pm'}) { # expect inflated object
   is($track->disc->cdid, 4, 'set_from_related ok, including alternative accessor' );
 } else {
   is( $track->cd, 4, 'set_from_related ok' );
 }
+
+$track->set_from_related( cd => undef );
+
+ok( !defined($track->cd), 'set_from_related with undef ok');
+
 
 # update_from_related, the same as set_from_related, but it calls update afterwards
 $track = $schema->resultset("Track")->create( {
@@ -131,6 +136,20 @@ my $searched = $mapped_rs->search({'mapped_artists.artistid' => {'!=', undef}});
 
 cmp_ok($searched->count, '==', 2, "Both artist returned from map after adding another condition");
 
+# check join through cascaded has_many relationships
+$artist = $schema->resultset("Artist")->find(1);
+my $trackset = $artist->cds->search_related('tracks');
+# LEFT join means we also see the trackless additional album...
+cmp_ok($trackset->count, '==', 11, "Correct number of tracks for artist");
+
+# now see about updating eveything that belongs to artist 2 to artist 3
+$artist = $schema->resultset("Artist")->find(2);
+my $nartist = $schema->resultset("Artist")->find(3);
+cmp_ok($artist->cds->count, '==', 1, "Correct orig #cds for artist");
+cmp_ok($nartist->cds->count, '==', 1, "Correct orig #cds for artist");
+$artist->cds->update({artist => $nartist->id});
+cmp_ok($artist->cds->count, '==', 0, "Correct new #cds for artist");
+cmp_ok($nartist->cds->count, '==', 2, "Correct new #cds for artist");
 
 }
 

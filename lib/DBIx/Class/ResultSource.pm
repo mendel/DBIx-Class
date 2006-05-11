@@ -127,7 +127,7 @@ Convenience alias to add_columns.
 sub add_columns {
   my ($self, @cols) = @_;
   $self->_ordered_columns(\@cols) unless $self->_ordered_columns;
-
+  
   my @added;
   my $columns = $self->_columns;
   while (my $col = shift @cols) {
@@ -204,41 +204,6 @@ sub columns {
   ) if (@_ > 1);
   return @{$self->{_ordered_columns}||[]};
 }
-
-=head2 remove_columns
-
-  $table->remove_columns(qw/col1 col2 col3/);
-
-Removes columns from the result source.
-
-=head2 remove_column
-
-  $table->remove_column('col');
-
-Convenience alias to remove_columns.
-
-=cut
-
-sub remove_columns {
-  my ($self, @cols) = @_;
-
-  return unless $self->_ordered_columns;
-
-  my $columns = $self->_columns;
-  my @remaining;
-
-  foreach my $col (@{$self->_ordered_columns}) {
-    push @remaining, $col unless grep(/$col/, @cols);
-  }
-
-  foreach (@cols) {
-    undef $columns->{$_};
-  };
-
-  $self->_ordered_columns(\@remaining);
-}
-
-*remove_column = \&remove_columns;
 
 =head2 set_primary_key
 
@@ -323,7 +288,10 @@ Returns an expression of the source to be supplied to storage to specify
 retrieval from this source. In the case of a database, the required FROM
 clause contents.
 
-=cut
+=head2 schema
+
+Returns the L<DBIx::Class::Schema> object that this result source 
+belongs too.
 
 =head2 storage
 
@@ -374,11 +342,11 @@ the SQL command immediately before C<JOIN>.
 
 An arrayref containing a list of accessors in the foreign class to proxy in
 the main class. If, for example, you do the following:
-
+  
   CD->might_have(liner_notes => 'LinerNotes', undef, {
     proxy => [ qw/notes/ ],
   });
-
+  
 Then, assuming LinerNotes has an accessor named notes, you can do:
 
   my $cd = CD->find(1);
@@ -485,113 +453,6 @@ sub has_relationship {
   return exists $self->_relationships->{$rel};
 }
 
-=head2 reverse_relationship_info
-
-=over 4
-
-=item Arguments: $relname
-
-=back
-
-Returns an array of hash references of relationship information for 
-the other side of the specified relationship name.
-
-=cut
-
-sub reverse_relationship_info {
-  my ($self, $rel) = @_;
-  my $rel_info = $self->relationship_info($rel);
-  my $ret = {};
-
-  return $ret unless ((ref $rel_info->{cond}) eq 'HASH');
-
-  my @cond = keys(%{$rel_info->{cond}});
-  my @refkeys = map {/^\w+\.(\w+)$/} @cond;
-  my @keys = map {$rel_info->{cond}->{$_} =~ /^\w+\.(\w+)$/} @cond;
-  
-  # Get the related result source for this relationship
-  my $othertable = $self->related_source($rel);
-
-  # Get all the relationships for that source that related to this source
-  # whose foreign column set are our self columns on $rel and whose self
-  # columns are our foreign columns on $rel.                
-  my @otherrels = $othertable->relationships();
-  my $otherrelationship;
-  foreach my $otherrel (@otherrels) {
-    my $otherrel_info = $othertable->relationship_info($otherrel);
-
-    my $back = $othertable->related_source($otherrel);
-    next unless $back->name eq $self->name;
-
-    my @othertestconds;
-
-    if (ref $otherrel_info->{cond} eq 'HASH') {
-      @othertestconds = ($otherrel_info->{cond});
-    }
-    elsif (ref $otherrel_info->{cond} eq 'ARRAY') {
-      @othertestconds = @{$otherrel_info->{cond}};
-    }
-    else {
-      next;
-    }
-
-    foreach my $othercond (@othertestconds) {
-      my @other_cond = keys(%$othercond);
-      my @other_refkeys = map {/^\w+\.(\w+)$/} @other_cond;
-      my @other_keys = map {$othercond->{$_} =~ /^\w+\.(\w+)$/} @other_cond;
-      next if (!$self->compare_relationship_keys(\@refkeys, \@other_keys) || 
-               !$self->compare_relationship_keys(\@other_refkeys, \@keys));
-      $ret->{$otherrel} =  $otherrel_info;
-    }
-  }
-  return $ret;
-}
-
-=head2 compare_relationship_keys
-
-=over 4
-
-=item Arguments: $keys1, $keys2
-
-=back
-
-Returns true if both sets of keynames are the same, false otherwise.
-
-=cut
-
-sub compare_relationship_keys {
-  my ($self, $keys1, $keys2) = @_;
-
-  # Make sure every keys1 is in keys2
-  my $found;
-  foreach my $key (@$keys1) {
-    $found = 0;
-    foreach my $prim (@$keys2) {
-      if ($prim eq $key) {
-        $found = 1;
-        last;
-      }
-    }
-    last unless $found;
-  }
-
-  # Make sure every key2 is in key1
-  if ($found) {
-    foreach my $prim (@$keys2) {
-      $found = 0;
-      foreach my $key (@$keys1) {
-        if ($prim eq $key) {
-          $found = 1;
-          last;
-        }
-      }
-      last unless $found;
-    }
-  }
-
-  return $found;
-}
-
 =head2 resolve_join
 
 =over 4
@@ -650,7 +511,8 @@ sub resolve_condition {
   #warn %$cond;
   if (ref $cond eq 'HASH') {
     my %ret;
-    while (my ($k, $v) = each %{$cond}) {
+    foreach my $k (keys %{$cond}) {
+      my $v = $cond->{$k};
       # XXX should probably check these are valid columns
       $k =~ s/^foreign\.// ||
         $self->throw_exception("Invalid rel cond key ${k}");
@@ -660,8 +522,12 @@ sub resolve_condition {
         #warn "$self $k $for $v";
         $ret{$k} = $for->get_column($v);
         #warn %ret;
+      } elsif (!defined $for) { # undef, i.e. "no object"
+        $ret{$k} = undef;
       } elsif (ref $as) { # reverse object
         $ret{$v} = $as->get_column($k);
+      } elsif (!defined $as) { # undef, i.e. "no reverse object"
+        $ret{$v} = undef;
       } else {
         $ret{"${as}.${k}"} = "${for}.${v}";
       }
@@ -846,9 +712,14 @@ sub resultset {
     'resultset does not take any arguments. If you want another resultset, '.
     'call it on the schema instead.'
   ) if scalar @_;
-  return $self->{_resultset}
-    if ref $self->{_resultset} eq $self->resultset_class;
-  return $self->{_resultset} = $self->resultset_class->new(
+
+  # disabled until we can figure out a way to do it without consistency issues
+  #
+  #return $self->{_resultset}
+  #  if ref $self->{_resultset} eq $self->resultset_class;
+  #return $self->{_resultset} =
+
+  return $self->resultset_class->new(
     $self, $self->{resultset_attributes}
   );
 }

@@ -20,6 +20,8 @@ sub select {
   my ($self, $table, $fields, $where, $order, @rest) = @_;
   $table = $self->_quote($table) unless ref($table);
   @rest = (-1) unless defined $rest[0];
+  die "LIMIT 0 Does Not Compute" if $rest[0] == 0;
+    # and anyway, SQL::Abstract::Limit will cause a barf if we don't first
   local $self->{having_bind} = [];
   my ($sql, @ret) = $self->SUPER::select(
     $table, $self->_recurse_fields($fields), $where, $order, @rest
@@ -240,7 +242,7 @@ use base qw/DBIx::Class/;
 __PACKAGE__->load_components(qw/AccessorGroup/);
 
 __PACKAGE__->mk_group_accessors('simple' =>
-  qw/_connect_info _dbh _sql_maker _conn_pid _conn_tid debug debugfh
+  qw/connect_info _dbh _sql_maker _conn_pid _conn_tid debug debugfh
      cursor on_connect_do transaction_depth/);
 
 sub new {
@@ -276,25 +278,6 @@ This class represents the connection to the database
 =head1 METHODS
 
 =cut
-
-=head2 connect_info
-
-Connection information arrayref.  Can either be the same arguments
-one would pass to DBI->connect, or a code-reference which returns
-a connected database handle.  In either case, there is an optional
-final element in the arrayref, which can hold a hashref of
-connection-specific Storage::DBI options.  These include
-C<on_connect_do>, and the sql_maker options C<limit_dialect>,
-C<quote_char>, and C<name_sep>.  Examples:
-
-  ->connect_info([ 'dbi:SQLite:./foo.db' ]);
-  ->connect_info(sub { DBI->connect(...) });
-  ->connect_info([ 'dbi:Pg:dbname=foo',
-                   'postgres',
-                   '',
-                   { AutoCommit => 0 },
-                   { quote_char => q{`}, name_sep => q{@} },
-                 ]);
 
 =head2 on_connect_do
 
@@ -364,6 +347,12 @@ sub ensure_connected {
   }
 }
 
+=head2 dbh
+
+Returns the dbh - a data base handle of class L<DBI>.
+
+=cut
+
 sub dbh {
   my ($self) = @_;
 
@@ -379,40 +368,9 @@ sub sql_maker {
   return $self->_sql_maker;
 }
 
-sub connect_info {
-    my ($self, $info_arg) = @_;
-
-    if($info_arg) {
-        my $info = [ @$info_arg ]; # copy because we can alter it
-        my $last_info = $info->[-1];
-        if(ref $last_info eq 'HASH') {
-            my $used;
-            if(my $on_connect_do = $last_info->{on_connect_do}) {
-               $used = 1;
-               $self->on_connect_do($on_connect_do);
-            }
-            for my $sql_maker_opt (qw/limit_dialect quote_char name_sep/) {
-                if(my $opt_val = $last_info->{$sql_maker_opt}) {
-                    $used = 1;
-                    $self->sql_maker->$sql_maker_opt($opt_val);
-                }
-            }
-
-            # remove our options hashref if it was there, to avoid confusing
-            #   DBI in the case the user didn't use all 4 DBI options, as in:
-            #   [ 'dbi:SQLite:foo.db', { quote_char => q{`} } ]
-            pop(@$info) if $used;
-        }
-
-        $self->_connect_info($info);
-    }
-
-    $self->_connect_info;
-}
-
 sub _populate_dbh {
   my ($self) = @_;
-  my @info = @{$self->_connect_info || []};
+  my @info = @{$self->connect_info || []};
   $self->_dbh($self->_connect(@info));
   my $driver = $self->_dbh->{Driver}->{Name};
   eval "require DBIx::Class::Storage::DBI::${driver}";
@@ -441,17 +399,20 @@ sub _connect {
       $DBI::connect_via = 'connect';
   }
 
-  if(ref $info[0] eq 'CODE') {
-      $dbh = &{$info[0]};
-  }
-  else {
-      $dbh = DBI->connect(@info);
-  }
+  eval {
+    if(ref $info[0] eq 'CODE') {
+        $dbh = &{$info[0]};
+    }
+    else {
+        $dbh = DBI->connect(@info);
+    }
+  };
 
   $DBI::connect_via = $old_connect_via if $old_connect_via;
 
-  $self->throw_exception("DBI Connection failed: $DBI::errstr")
-      unless $dbh;
+  if (!$dbh || $@) {
+    $self->throw_exception("DBI Connection failed: " . ($@ || $DBI::errstr));
+  }
 
   $dbh;
 }
@@ -467,8 +428,14 @@ an entire code block to be executed transactionally.
 
 sub txn_begin {
   my $self = shift;
-  $self->dbh->begin_work
-    if $self->{transaction_depth}++ == 0 and $self->dbh->{AutoCommit};
+  if ($self->{transaction_depth}++ == 0) {
+    my $dbh = $self->dbh;
+    if ($dbh->{AutoCommit}) {
+      $self->debugfh->print("BEGIN WORK\n")
+        if ($self->debug);
+      $dbh->begin_work;
+    }
+  }
 }
 
 =head2 txn_commit
@@ -480,10 +447,19 @@ Issues a commit against the current dbh.
 sub txn_commit {
   my $self = shift;
   if ($self->{transaction_depth} == 0) {
-    $self->dbh->commit unless $self->dbh->{AutoCommit};
+    my $dbh = $self->dbh;
+    unless ($dbh->{AutoCommit}) {
+      $self->debugfh->print("COMMIT\n")
+        if ($self->debug);
+      $dbh->commit;
+    }
   }
   else {
-    $self->dbh->commit if --$self->{transaction_depth} == 0;
+    if (--$self->{transaction_depth} == 0) {
+      $self->debugfh->print("COMMIT\n")
+        if ($self->debug);
+      $self->dbh->commit;
+    }
   }
 }
 
@@ -500,12 +476,22 @@ sub txn_rollback {
 
   eval {
     if ($self->{transaction_depth} == 0) {
-      $self->dbh->rollback unless $self->dbh->{AutoCommit};
+      my $dbh = $self->dbh;
+      unless ($dbh->{AutoCommit}) {
+        $self->debugfh->print("ROLLBACK\n")
+          if ($self->debug);
+        $dbh->rollback;
+      }
     }
     else {
-      --$self->{transaction_depth} == 0 ?
-        $self->dbh->rollback :
+      if (--$self->{transaction_depth} == 0) {
+        $self->debugfh->print("ROLLBACK\n")
+          if ($self->debug);
+        $self->dbh->rollback;
+      }
+      else {
         die DBIx::Class::Storage::NESTED_ROLLBACK_EXCEPTION->new;
+      }
     }
   };
 
@@ -526,13 +512,20 @@ sub _execute {
       my @debug_bind = map { defined $_ ? qq{`$_'} : q{`NULL'} } @bind;
       $self->debugfh->print("$sql: " . join(', ', @debug_bind) . "\n");
   }
-  my $sth = $self->sth($sql,$op);
-  $self->throw_exception('no sth generated via sql (' . $self->_dbh->errstr . "): $sql") unless $sth;
+  my $sth = eval { $self->sth($sql,$op) };
+
+  if (!$sth || $@) {
+    $self->throw_exception('no sth generated via sql (' . ($@ || $self->_dbh->errstr) . "): $sql");
+  }
+
   @bind = map { ref $_ ? ''.$_ : $_ } @bind; # stringify args
   my $rv;
   if ($sth) {
-    $rv = $sth->execute(@bind)
-      or $self->throw_exception("Error executing '$sql': " . $sth->errstr);
+    $rv = eval { $sth->execute(@bind) };
+
+    if ($@ || !$rv) {
+      $self->throw_exception("Error executing '$sql': ".($@ || $sth->errstr));
+    }
   } else {
     $self->throw_exception("'$sql' did not generate a statement.");
   }
@@ -575,6 +568,8 @@ sub _select {
       $self->sql_maker->_default_limit_syntax eq "GenericSubQ") {
         $attrs->{software_limit} = 1;
   } else {
+    $self->throw_exception("rows attribute must be positive if present")
+      if (defined($attrs->{rows}) && !($attrs->{rows} > 0));
     push @args, $attrs->{rows}, $attrs->{offset};
   }
   return $self->_execute(@args);
@@ -611,14 +606,16 @@ Returns database type info for a given table columns.
 sub columns_info_for {
   my ($self, $table) = @_;
 
-  if ($self->dbh->can('column_info')) {
+  my $dbh = $self->dbh;
+
+  if ($dbh->can('column_info')) {
     my %result;
-    my $old_raise_err = $self->dbh->{RaiseError};
-    my $old_print_err = $self->dbh->{PrintError};
-    $self->dbh->{RaiseError} = 1;
-    $self->dbh->{PrintError} = 0;
+    my $old_raise_err = $dbh->{RaiseError};
+    my $old_print_err = $dbh->{PrintError};
+    $dbh->{RaiseError} = 1;
+    $dbh->{PrintError} = 0;
     eval {
-      my $sth = $self->dbh->column_info( undef, undef, $table, '%' );
+      my $sth = $dbh->column_info( undef, undef, $table, '%' );
       $sth->execute();
       while ( my $info = $sth->fetchrow_hashref() ){
         my %column_info;
@@ -630,21 +627,21 @@ sub columns_info_for {
         $result{$info->{COLUMN_NAME}} = \%column_info;
       }
     };
-    $self->dbh->{RaiseError} = $old_raise_err;
-    $self->dbh->{PrintError} = $old_print_err;
+    $dbh->{RaiseError} = $old_raise_err;
+    $dbh->{PrintError} = $old_print_err;
     return \%result if !$@;
   }
 
   my %result;
-  my $sth = $self->dbh->prepare("SELECT * FROM $table WHERE 1=0");
+  my $sth = $dbh->prepare("SELECT * FROM $table WHERE 1=0");
   $sth->execute;
   my @columns = @{$sth->{NAME_lc}};
   for my $i ( 0 .. $#columns ){
     my %column_info;
     my $type_num = $sth->{TYPE}->[$i];
     my $type_name;
-    if(defined $type_num && $self->dbh->can('type_info')) {
-      my $type_info = $self->dbh->type_info($type_num);
+    if(defined $type_num && $dbh->can('type_info')) {
+      my $type_info = $dbh->type_info($type_num);
       $type_name = $type_info->{TYPE_NAME} if $type_info;
     }
     $column_info{data_type} = $type_name ? $type_name : $type_num;
@@ -708,6 +705,11 @@ is produced (as when the L<debug> method is set).
 
 If the value is of the form C<1=/path/name> then the trace output is
 written to the file C</path/name>.
+
+This environment variable is checked when the storage object is first
+created (when you call connect on your schema).  So, run-time changes 
+to this environment variable will not take effect unless you also 
+re-connect on your schema.
 
 =head1 AUTHORS
 

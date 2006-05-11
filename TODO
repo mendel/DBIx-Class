@@ -1,16 +1,4 @@
 
-2006-03-25 by mst
-  - Refactor ResultSet::new to be less hairy
-    - we should move the setup of select, as, and from out of here
-      - these should be local rs attrs, not main attrs, and extra joins
-        provided on search should be merged
-  - find a way to un-wantarray search without breaking compat
-  - audit logging component
-  - delay relationship setup if done via ->load_classes
-  - double-sided relationships
-  - incremental deploy
-  - make short form of class specifier in relationships work
-
 2006-01-31 by bluefeet
  - Create a DBIx::Class::FilterColumn to replace inflate/deflate. This 
    component would provide a new syntax for filtering column update and 
@@ -28,16 +16,4 @@
 
 2006-03-18 by bluefeet
  - Support table locking.
-
-2006-03-21 by bluefeet
- - When subclassing a dbic class make it so you don't have to do 
-   __PACKAGE__->table(__PACKAGE__->table()); for the result set to 
-   return the correct object type.
-
-2006-03-27 by mst
- Add the ability for deploy to be given a directory and grab <dbname>.sql 
- out of there if available. Try SQL::Translator if not. If none of the above, 
- cry (and die()).  Then you can have a script that pre-gens for all available 
- SQLT modules so an app can do its own deploy without SQLT on the target 
- system
 

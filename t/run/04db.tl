@@ -44,7 +44,7 @@ my $test_type_info = {
     'name' => {
         'data_type' => 'varchar',
         'is_nullable' => 0,
-    },
+    }
 };
 is_deeply($type_info, $test_type_info, 'columns_info_for - column data types');
 

@@ -15,6 +15,7 @@ my %arguments = (
         'Class::Data::Accessor'     => 0.01,
      	'Carp::Clan'		    => 0,
         'DBI'                       => 1.40,
+        'version'                   => 0,
     },
     build_requires      => {
         'DBD::SQLite'               => 1.11,

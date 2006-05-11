@@ -279,6 +279,25 @@ This class represents the connection to the database
 
 =cut
 
+=head2 connect_info
+
+Connection information arrayref.  Can either be the same arguments
+one would pass to DBI->connect, or a code-reference which returns
+a connected database handle.  In either case, there is an optional
+final element in the arrayref, which can hold a hashref of
+connection-specific Storage::DBI options.  These include
+C<on_connect_do>, and the sql_maker options C<limit_dialect>,
+C<quote_char>, and C<name_sep>.  Examples:
+
+  ->connect_info([ 'dbi:SQLite:./foo.db' ]);
+  ->connect_info(sub { DBI->connect(...) });
+  ->connect_info([ 'dbi:Pg:dbname=foo',
+                   'postgres',
+                   '',
+                   { AutoCommit => 0 },
+                   { quote_char => q{`}, name_sep => q{@} },
+                 ]);
+
 =head2 on_connect_do
 
 Executes the sql statements given as a listref on every db connect.
@@ -366,6 +385,37 @@ sub sql_maker {
     $self->_sql_maker(new DBIC::SQL::Abstract( limit_dialect => $self->dbh ));
   }
   return $self->_sql_maker;
+}
+
+sub connect_info {
+    my ($self, $info_arg) = @_;
+
+    if($info_arg) {
+        my $info = [ @$info_arg ]; # copy because we can alter it
+        my $last_info = $info->[-1];
+        if(ref $last_info eq 'HASH') {
+            my $used;
+            if(my $on_connect_do = $last_info->{on_connect_do}) {
+               $used = 1;
+               $self->on_connect_do($on_connect_do);
+            }
+            for my $sql_maker_opt (qw/limit_dialect quote_char name_sep/) {
+                if(my $opt_val = $last_info->{$sql_maker_opt}) {
+                    $used = 1;
+                    $self->sql_maker->$sql_maker_opt($opt_val);
+                }
+            }
+
+            # remove our options hashref if it was there, to avoid confusing
+            #   DBI in the case the user didn't use all 4 DBI options, as in:
+            #   [ 'dbi:SQLite:foo.db', { quote_char => q{`} } ]
+            pop(@$info) if $used;
+        }
+
+        $self->_connect_info($info);
+    }
+
+    $self->_connect_info;
 }
 
 sub _populate_dbh {
@@ -600,6 +650,59 @@ sub sth {
 =head2 columns_info_for
 
 Returns database type info for a given table columns.
+
+Keys which may be set include:
+
+=over
+
+=item C<data_type>
+
+=item C<size>
+
+=item C<default_value>
+
+=item C<is_nullable>
+
+=item C<is_unsigned> For numeric types.
+
+=item C<decimal_digits>
+
+=item C<data_set> For list types such as C<enum> and C<set>, contains
+an arrayref of valid values.
+
+=item C<range_min> For numeric types, the minimum valid value.
+
+=item C<range_max> For numeric types, the maximum valid value.
+
+=back
+
+Keys which may be set for various database's features/bugs.
+
+=over
+
+=item C<length_in_bytes> When the C<size> is a length, such as the length of
+a C<text> field, if this value is true, the length should be measured in
+bytes rather than characters.
+
+=item C<ignore_trailing_spaces> When the size is a length, such as the
+length of a C<text> field, if this value is true, trailing spaced should be
+counted.
+
+=item C<decimal_high_positive> For decimal types which, when positive,
+use the byte reserved for the sign to increase the precision by 1.
+
+For Example: The normal range of C<DECIMAL(5,2)> should be C<-999.99> to
+C<999.99>. C<decimal_high_positive> indicates that the valid range of values
+is actually C<-999.99> to C<9999.99>.
+
+=item C<decimal_literal_range> For decimal types which include the sign and
+decimal point in the precision length.
+
+For Example: The normal range of C<DECIMAL(5,2)> should be C<-999.99> to
+C<999.99>. C<decimal_literal_range> indicates that the valid range of values
+is actually C<-9.99> to C<99.99>.
+
+=back
 
 =cut
 

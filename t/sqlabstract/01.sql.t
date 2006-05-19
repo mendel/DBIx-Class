@@ -43,6 +43,7 @@ my $last = $offset + $limit;
 
 
 my $base_sql = 'requestor, worker, colC, colH FROM TheTable WHERE ( requestor = ? AND status != ? AND ( ( worker = ? ) OR ( worker = ? ) OR ( worker = ? ) ) )';
+my $match_sql = 'requestor[^\,]*, worker[^\,]*, colC[^\,]*, colH[^\,]* FROM TheTable WHERE \( requestor = \? AND status != \? AND \( \( worker = \? \) OR \( worker = \? \) OR \( worker = \? \) \) \)';
 
 my $sql_ab = DBIC::SQL::Abstract->new( limit_dialect => 'LimitOffset' );
 
@@ -77,7 +78,7 @@ TODO: {
 
 # RowNum
 lives_ok { ( $stmt, @bind ) = $sql_ab->select( $table, $fields, $where, $order, $limit, $offset, 'RowNum' ) } 'select RowNum';
-like( $stmt, qr~\Q$base_sql\E~, 'base SQL' );
+like( $stmt, qr~$match_sql~, 'base SQL' );
 
 TODO: {
     local $TODO = 'need regex for complex query';

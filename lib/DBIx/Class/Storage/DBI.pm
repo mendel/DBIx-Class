@@ -496,8 +496,8 @@ Issues a commit against the current dbh.
 
 sub txn_commit {
   my $self = shift;
+  my $dbh = $self->dbh;
   if ($self->{transaction_depth} == 0) {
-    my $dbh = $self->dbh;
     unless ($dbh->{AutoCommit}) {
       $self->debugfh->print("COMMIT\n")
         if ($self->debug);
@@ -508,7 +508,7 @@ sub txn_commit {
     if (--$self->{transaction_depth} == 0) {
       $self->debugfh->print("COMMIT\n")
         if ($self->debug);
-      $self->dbh->commit;
+      $dbh->commit;
     }
   }
 }
@@ -525,8 +525,8 @@ sub txn_rollback {
   my $self = shift;
 
   eval {
+    my $dbh = $self->dbh;
     if ($self->{transaction_depth} == 0) {
-      my $dbh = $self->dbh;
       unless ($dbh->{AutoCommit}) {
         $self->debugfh->print("ROLLBACK\n")
           if ($self->debug);
@@ -537,7 +537,7 @@ sub txn_rollback {
       if (--$self->{transaction_depth} == 0) {
         $self->debugfh->print("ROLLBACK\n")
           if ($self->debug);
-        $self->dbh->rollback;
+        $dbh->rollback;
       }
       else {
         die DBIx::Class::Storage::NESTED_ROLLBACK_EXCEPTION->new;
@@ -559,25 +559,27 @@ sub _execute {
   my ($sql, @bind) = $self->sql_maker->$op($ident, @args);
   unshift(@bind, @$extra_bind) if $extra_bind;
   if ($self->debug) {
-      my @debug_bind = map { defined $_ ? qq{`$_'} : q{`NULL'} } @bind;
-      $self->debugfh->print("$sql: " . join(', ', @debug_bind) . "\n");
+    my $bind_str = join(', ', map {
+      defined $_ ? qq{`$_'} : q{`NULL'}
+    } @bind);
+    $self->debugfh->print("$sql ($bind_str)\n");
   }
   my $sth = eval { $self->sth($sql,$op) };
 
   if (!$sth || $@) {
-    $self->throw_exception('no sth generated via sql (' . ($@ || $self->_dbh->errstr) . "): $sql");
+    $self->throw_exception(
+      'no sth generated via sql (' . ($@ || $self->_dbh->errstr) . "): $sql"
+    );
   }
-
   @bind = map { ref $_ ? ''.$_ : $_ } @bind; # stringify args
-  my $rv;
-  if ($sth) {
-    $rv = eval { $sth->execute(@bind) };
-
-    if ($@ || !$rv) {
-      $self->throw_exception("Error executing '$sql': ".($@ || $sth->errstr));
-    }
-  } else {
-    $self->throw_exception("'$sql' did not generate a statement.");
+  my $rv = eval { $sth->execute(@bind) };
+  if ($@ || !$rv) {
+    my $bind_str = join(', ', map {
+      defined $_ ? qq{`$_'} : q{`NULL'}
+    } @bind);
+    $self->throw_exception(
+      "Error executing '$sql' ($bind_str): ".($@ || $sth->errstr)
+    );
   }
   return (wantarray ? ($rv, $sth, @bind) : $rv);
 }

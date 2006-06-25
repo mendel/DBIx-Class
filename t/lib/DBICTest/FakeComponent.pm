@@ -1,4 +1,4 @@
-#   belongs to t/run/30ensure_class_loaded.tl
+#   belongs to t/run/90ensure_class_loaded.tl
 package # hide from PAUSE 
     DBICTest::FakeComponent;
 use warnings;

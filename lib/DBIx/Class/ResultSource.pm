@@ -30,6 +30,16 @@ retrieved, most usually a table (see L<DBIx::Class::ResultSource::Table>)
 
 =head1 METHODS
 
+=pod
+
+=head2 new
+
+  $class->new();
+
+  $class->new({attribute_name => value});
+
+Creates a new ResultSource object.  Not normally called directly by end users.
+
 =cut
 
 sub new {
@@ -184,7 +194,7 @@ sub column_info {
         $lc_info->{lc $realcol} = $info->{$realcol};
       }
       foreach my $col ( keys %{$self->_columns} ) {
-        $self->_columns->{$col} = $info->{$col} || $lc_info->{lc $col};
+        $self->_columns->{$col} = { %{ $self->_columns->{$col}}, %{$info->{$col} || $lc_info->{lc $col}} };
       }
     }
   }
@@ -292,13 +302,24 @@ constraint.
     constraint_name => [ qw/column1 column2/ ],
   );
 
+Alternatively, you can specify only the columns:
+
+  __PACKAGE__->add_unique_constraint([ qw/column1 column2/ ]);
+
+This will result in a unique constraint named C<table_column1_column2>, where
+C<table> is replaced with the table name.
+
 Unique constraints are used, for example, when you call
 L<DBIx::Class::ResultSet/find>. Only columns in the constraint are searched.
 
 =cut
 
 sub add_unique_constraint {
-  my ($self, $name, $cols) = @_;
+  my $self = shift;
+  my $cols = pop @_;
+  my $name = shift;
+
+  $name ||= $self->name_unique_constraint($cols);
 
   foreach my $col (@$cols) {
     $self->throw_exception("No such column $col on table " . $self->name)
@@ -308,6 +329,22 @@ sub add_unique_constraint {
   my %unique_constraints = $self->unique_constraints;
   $unique_constraints{$name} = $cols;
   $self->_unique_constraints(\%unique_constraints);
+}
+
+=head2 name_unique_constraint
+
+Return a name for a unique constraint containing the specified columns. These
+names consist of the table name and each column name, separated by underscores.
+
+For example, a constraint on a table named C<cd> containing the columns
+C<artist> and C<title> would result in a constraint name of C<cd_artist_title>.
+
+=cut
+
+sub name_unique_constraint {
+  my ($self, $cols) = @_;
+
+  return join '_', $self->name, @$cols;
 }
 
 =head2 unique_constraints

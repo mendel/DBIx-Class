@@ -3,9 +3,15 @@ package DBIx::Class::Storage::DBI::Pg;
 use strict;
 use warnings;
 
+use DBD::Pg;
+
 use base qw/DBIx::Class::Storage::DBI/;
 
 # __PACKAGE__->load_components(qw/PK::Auto/);
+
+# Warn about problematic versions of DBD::Pg
+warn "DBD::Pg 1.49 is strongly recommended"
+  if ($DBD::Pg::VERSION < 1.49);
 
 sub last_insert_id {
   my ($self,$source,$col) = @_;

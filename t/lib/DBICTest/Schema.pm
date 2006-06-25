@@ -11,7 +11,6 @@ __PACKAGE__->load_classes(qw/
   CD
   Link
   Bookmark
-  #Casecheck
   #dummy
   Track
   Tag
@@ -25,6 +24,7 @@ __PACKAGE__->load_classes(qw/
   /]},
   (
     'FourKeys',
+    'FourKeys_to_TwoKeys',
     '#dummy',
     'SelfRef',
     'ArtistUndirectedMap',

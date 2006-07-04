@@ -28,17 +28,17 @@ cmp_ok( $rs->count, '==', 1, "join with fields quoted");
 $rs = DBICTest::CD->search({},
             { 'order_by' => 'year DESC'});
 {
-       my $warnings;
+       my $warnings = '';
        local $SIG{__WARN__} = sub { $warnings .= $_[0] };
        my $first = eval{ $rs->first() };
-       ok( $warnings =~ /ORDER BY terms/, "Problem with ORDER BY quotes" );
+       like( $warnings, qr/ORDER BY terms/, "Problem with ORDER BY quotes" );
 }
 
 my $order = 'year DESC';
 $rs = DBICTest::CD->search({},
             { 'order_by' => \$order });
 {
-       my $warnings;
+       my $warnings = '';
        local $SIG{__WARN__} = sub { $warnings .= $_[0] };
        my $first = $rs->first();
        ok( $warnings !~ /ORDER BY terms/,

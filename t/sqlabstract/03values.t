@@ -10,7 +10,7 @@ BEGIN { plan tests => 6 }
 
 use_ok('DBIx::Class::Storage::DBI');
 
-my $sql = ~DBIC::SQL::Abstract->new;
+my $sql = DBIC::SQL::Abstract->new;
 
 my @data = (
     {

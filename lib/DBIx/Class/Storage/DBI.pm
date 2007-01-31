@@ -753,11 +753,12 @@ sub _dbh_txn_nested_begin {
 sub txn_begin {
   my $self = shift;
   $self->ensure_connected();
-  if ($self->{transaction_depth}++ == 0) {
+  if ($self->{transaction_depth} == 0) {
     $self->dbh_do($self->can('_dbh_txn_begin'));
   } else {
     $self->dbh_do($self->can('_dbh_txn_nested_begin'));
   }
+  $self->{transaction_depth}++;
 }
 
 sub _dbh_txn_commit {
@@ -774,7 +775,8 @@ sub _dbh_txn_nested_commit {
 sub txn_commit {
   my $self = shift;
   $self->ensure_connected();
-  if (--$self->{transaction_depth} <= 0) {
+  $self->{transaction_depth}--;
+  if ($self->{transaction_depth} <= 0) {
     $self->{transaction_depth} = 0;
     $self->dbh_do($self->can('_dbh_txn_commit'));
   } else {
@@ -795,8 +797,8 @@ sub _dbh_txn_nested_rollback {
 
 sub txn_rollback {
   my $self = shift;
-
-  if (--$self->{transaction_depth} <= 0) {
+  $self->{transaction_depth}--;
+  if ($self->{transaction_depth} <= 0) {
     $self->{transaction_depth} = 0;
     eval { $self->dbh_do($self->can('_dbh_txn_rollback')) };
   } else {

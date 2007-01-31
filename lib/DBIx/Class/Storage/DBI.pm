@@ -741,67 +741,67 @@ sub _connect {
 
 sub _dbh_txn_begin {
   my ($self, $dbh) = @_;
-  if ($dbh->{AutoCommit}) {
-    $self->debugobj->txn_begin()
-      if ($self->debug);
-    $dbh->begin_work;
-  }
+  $self->debugobj->txn_begin() if $self->debug;
+  $dbh->begin_work;
+}
+
+sub _dbh_txn_nested_begin {
+  my ($self, $dbh) = @_;
+  # Do nothing; by default databases don't support nested transactions.
 }
 
 sub txn_begin {
   my $self = shift;
-  $self->dbh_do($self->can('_dbh_txn_begin'))
-    if $self->{transaction_depth}++ == 0;
+  $self->ensure_connected();
+  if ($self->{transaction_depth}++ == 0) {
+    $self->dbh_do($self->can('_dbh_txn_begin'));
+  } else {
+    $self->dbh_do($self->can('_dbh_txn_nested_begin'));
+  }
 }
 
 sub _dbh_txn_commit {
   my ($self, $dbh) = @_;
-  if ($self->{transaction_depth} == 0) {
-    unless ($dbh->{AutoCommit}) {
-      $self->debugobj->txn_commit()
-        if ($self->debug);
-      $dbh->commit;
-    }
-  }
-  else {
-    if (--$self->{transaction_depth} == 0) {
-      $self->debugobj->txn_commit()
-        if ($self->debug);
-      $dbh->commit;
-    }
-  }
+  $self->debugobj->txn_commit() if $self->debug;
+  $dbh->commit;
+}
+
+sub _dbh_txn_nested_commit {
+  my ($self, $dbh) = @_;
+  # Do nothing; by default databases don't support nested transactions.
 }
 
 sub txn_commit {
   my $self = shift;
-  $self->dbh_do($self->can('_dbh_txn_commit'));
+  $self->ensure_connected();
+  if (--$self->{transaction_depth} <= 0) {
+    $self->{transaction_depth} = 0;
+    $self->dbh_do($self->can('_dbh_txn_commit'));
+  } else {
+    $self->dbh_do($self->can('_dbh_txn_nested_commit'));
+  }
 }
 
 sub _dbh_txn_rollback {
   my ($self, $dbh) = @_;
-  if ($self->{transaction_depth} == 0) {
-    unless ($dbh->{AutoCommit}) {
-      $self->debugobj->txn_rollback()
-        if ($self->debug);
-      $dbh->rollback;
-    }
-  }
-  else {
-    if (--$self->{transaction_depth} == 0) {
-      $self->debugobj->txn_rollback()
-        if ($self->debug);
-      $dbh->rollback;
-    }
-    else {
-      die DBIx::Class::Storage::NESTED_ROLLBACK_EXCEPTION->new;
-    }
-  }
+  $self->debugobj->txn_rollback() if $self->debug;
+  $dbh->rollback;
+}
+
+sub _dbh_txn_nested_rollback {
+  my ($self, $dbh) = @_;
+  die DBIx::Class::Storage::NESTED_ROLLBACK_EXCEPTION->new;
 }
 
 sub txn_rollback {
   my $self = shift;
 
-  eval { $self->dbh_do($self->can('_dbh_txn_rollback')) };
+  if (--$self->{transaction_depth} <= 0) {
+    $self->{transaction_depth} = 0;
+    eval { $self->dbh_do($self->can('_dbh_txn_rollback')) };
+  } else {
+    eval { $self->dbh_do($self->can('_dbh_txn_nested_rollback')) };
+  }
   if ($@) {
     my $error = $@;
     my $exception_class = "DBIx::Class::Storage::NESTED_ROLLBACK_EXCEPTION";

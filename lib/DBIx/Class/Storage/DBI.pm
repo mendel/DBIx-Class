@@ -1135,7 +1135,7 @@ sub source_bind_attributes {
   foreach my $column ($source->columns) {
   
     my $data_type = $source->column_info($column)->{data_type} || '';
-    $bind_attributes->{$column} = $self->bind_attribute_by_data_type($data_type, $source)
+    $bind_attributes->{$column} = $self->bind_attribute_by_data_type($data_type, $source->storage)
      if $data_type;
   }
 
@@ -1299,10 +1299,10 @@ Generally only needed for special case column types, like bytea in postgres.
 =cut
 
 sub bind_attribute_by_data_type {
-  my ($self, $data_type, $source) = @_;return;
-  if($source) {
-    $source->storage->ensure_connected;
-    return $source->storage->bind_attribute_by_data_type($data_type)
+  my ($self, $data_type, $storage) = @_;
+  if($storage) {
+    $storage->ensure_connected;
+    return $storage->bind_attribute_by_data_type($data_type)
   }
   return;
 }

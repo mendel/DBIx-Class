@@ -243,6 +243,8 @@ groditi: Guillermo Roditi <groditi@cpan.org>
 
 jesper: Jesper Krogh
 
+jgoulah: John Goulah <jgoulah@cpan.org>
+
 jguenther: Justin Guenther <jguenther@cpan.org>
 
 jnapiorkowski: John Napiorkowski <jjn1056@yahoo.com>
@@ -277,7 +279,11 @@ phaylon: Robert Sedlacek <phaylon@dunkelheit.at>
 
 quicksilver: Jules Bean
 
+rafl: Florian Ragwitz <rafl@debian.org>
+
 rdj: Ryan D Johnson <ryan@innerfence.com>
+
+ribasushi: Peter Rabbitson <rabbit@rabbit.us>
 
 sc_: Just Another Perl Hacker
 

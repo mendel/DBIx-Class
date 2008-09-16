@@ -19,7 +19,7 @@ my $schema = DBICTest->init_schema();
 
 	foreach my $source ($schema->sources) {
 		my $table = $sqlt_schema->get_table($schema->source($source)->from);
-
+                next unless $table;
 		my $fk_count = scalar(grep { $_->type eq 'FOREIGN KEY' } $table->get_constraints);
 		my @indices = $table->get_indices;
 		my $index_count = scalar(@indices);
@@ -33,7 +33,7 @@ my $schema = DBICTest->init_schema();
 
 	foreach my $source ($schema->sources) {
 		my $table = $sqlt_schema->get_table($schema->source($source)->from);
-
+                next unless $table;
 		my $fk_count = scalar(grep { $_->type eq 'FOREIGN KEY' } $table->get_constraints);
 		my @indices = $table->get_indices;
 		my $index_count = scalar(@indices);
@@ -47,7 +47,7 @@ my $schema = DBICTest->init_schema();
 
 	foreach my $source ($schema->sources) {
 		my $table = $sqlt_schema->get_table($schema->source($source)->from);
-
+                next unless $table;
 		my @indices = $table->get_indices;
 		my $index_count = scalar(@indices);
 		is($index_count, 0, "correct number of indices for $source with add_fk_index => 0");

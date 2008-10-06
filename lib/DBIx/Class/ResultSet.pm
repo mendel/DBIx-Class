@@ -573,19 +573,29 @@ sub cursor {
   my $cd = $schema->resultset('CD')->single({ year => 2001 });
 
 Inflates the first result without creating a cursor if the resultset has
-any records in it; if not returns nothing. Used by L</find> as an optimisation.
+any records in it; if not returns nothing. Used by L</find> as a lean version of
+L</search>.
 
-Can optionally take an additional condition B<only> - this is a fast-code-path
-method; if you need to add extra joins or similar call L</search> and then
-L</single> without a condition on the L<DBIx::Class::ResultSet> returned from
-that.
+While this method can take an optional search condition (just like L</search>)
+being a fast-code-path it does not recognize search attributes. If you need to
+add extra joins or similar, call L</search> and then chain-call L</single> on the
+L<DBIx::Class::ResultSet> returned.
 
-B<Note>: As of 0.08100, this method assumes that the query returns only one
-row. If more than one row is returned, you will receive a warning:
+=over
+
+=item B<Note>
+
+As of 0.08100, this method enforces the assumption that the preceeding
+query returns only one row. If more than one row is returned, you will receive
+a warning:
 
   Query returned more than one row
 
-In this case, you should be using L</first> or L</find> instead.
+In this case, you should be using L</first> or L</find> instead, or if you really
+know what you are doing, use the L</rows> attribute to explicitly limit the size 
+of the resultset.
+
+=back
 
 =cut
 
@@ -1519,23 +1529,36 @@ sub new_result {
   my ($self, $values) = @_;
   $self->throw_exception( "new_result needs a hash" )
     unless (ref $values eq 'HASH');
-  $self->throw_exception(
-    "Can't abstract implicit construct, condition not a hash"
-  ) if ($self->{cond} && !(ref $self->{cond} eq 'HASH'));
 
-  my $alias = $self->{attrs}{alias};
-  my $collapsed_cond = $self->{cond} ? $self->_collapse_cond($self->{cond}) : {};
-
-  # precendence must be given to passed values over values inherited from the cond, 
-  # so the order here is important.
   my %new;
-  my %implied =  %{$self->_remove_alias($collapsed_cond, $alias)};
-  while( my($col,$value) = each %implied ){
-    if(ref($value) eq 'HASH' && keys(%$value) && (keys %$value)[0] eq '='){
-      $new{$col} = $value->{'='};
-      next;
+  my $alias = $self->{attrs}{alias};
+
+  if (
+    defined $self->{cond}
+    && $self->{cond} eq $DBIx::Class::ResultSource::UNRESOLVABLE_CONDITION
+  ) {
+    %new = %{$self->{attrs}{related_objects}};
+  } else {
+    $self->throw_exception(
+      "Can't abstract implicit construct, condition not a hash"
+    ) if ($self->{cond} && !(ref $self->{cond} eq 'HASH'));
+  
+    my $collapsed_cond = (
+      $self->{cond}
+        ? $self->_collapse_cond($self->{cond})
+        : {}
+    );
+  
+    # precendence must be given to passed values over values inherited from
+    # the cond, so the order here is important.
+    my %implied =  %{$self->_remove_alias($collapsed_cond, $alias)};
+    while( my($col,$value) = each %implied ){
+      if(ref($value) eq 'HASH' && keys(%$value) && (keys %$value)[0] eq '='){
+        $new{$col} = $value->{'='};
+        next;
+      }
+      $new{$col} = $value if $self->_is_deterministic_value($value);
     }
-    $new{$col} = $value if $self->_is_deterministic_value($value);
   }
 
   %new = (
@@ -2158,44 +2181,44 @@ sub _calculate_score {
 }
 
 sub _merge_attr {
-  my ($self, $a, $b) = @_;
+  my ($self, $orig, $import) = @_;
 
-  return $b unless defined($a);
-  return $a unless defined($b);
+  return $import unless defined($orig);
+  return $orig unless defined($import);
   
-  $a = $self->_rollout_attr($a);
-  $b = $self->_rollout_attr($b);
+  $orig = $self->_rollout_attr($orig);
+  $import = $self->_rollout_attr($import);
 
   my $seen_keys;
-  foreach my $b_element ( @{$b} ) {
-    # find best candidate from $a to merge $b_element into
+  foreach my $import_element ( @{$import} ) {
+    # find best candidate from $orig to merge $b_element into
     my $best_candidate = { position => undef, score => 0 }; my $position = 0;
-    foreach my $a_element ( @{$a} ) {
-      my $score = $self->_calculate_score( $a_element, $b_element );
+    foreach my $orig_element ( @{$orig} ) {
+      my $score = $self->_calculate_score( $orig_element, $import_element );
       if ($score > $best_candidate->{score}) {
         $best_candidate->{position} = $position;
         $best_candidate->{score} = $score;
       }
       $position++;
     }
-    my ($b_key) = ( ref $b_element eq 'HASH' ) ? keys %{$b_element} : ($b_element);
+    my ($import_key) = ( ref $import_element eq 'HASH' ) ? keys %{$import_element} : ($import_element);
 
-    if ($best_candidate->{score} == 0 || exists $seen_keys->{$b_key}) {
-      push( @{$a}, $b_element );
+    if ($best_candidate->{score} == 0 || exists $seen_keys->{$import_key}) {
+      push( @{$orig}, $import_element );
     } else {
-      my $a_best = $a->[$best_candidate->{position}];
-      # merge a_best and b_element together and replace original with merged
-      if (ref $a_best ne 'HASH') {
-        $a->[$best_candidate->{position}] = $b_element;
-      } elsif (ref $b_element eq 'HASH') {
-        my ($key) = keys %{$a_best};
-        $a->[$best_candidate->{position}] = { $key => $self->_merge_attr($a_best->{$key}, $b_element->{$key}) };
+      my $orig_best = $orig->[$best_candidate->{position}];
+      # merge orig_best and b_element together and replace original with merged
+      if (ref $orig_best ne 'HASH') {
+        $orig->[$best_candidate->{position}] = $import_element;
+      } elsif (ref $import_element eq 'HASH') {
+        my ($key) = keys %{$orig_best};
+        $orig->[$best_candidate->{position}] = { $key => $self->_merge_attr($orig_best->{$key}, $import_element->{$key}) };
       }
     }
-    $seen_keys->{$b_key} = 1; # don't merge the same key twice
+    $seen_keys->{$import_key} = 1; # don't merge the same key twice
   }
 
-  return $a;
+  return $orig;
 }
 
 sub result_source {

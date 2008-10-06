@@ -3,8 +3,6 @@ use warnings;
 
 use Test::More qw(no_plan);
 use lib qw(t/lib);
-use Scalar::Util qw/blessed/;
-use DateTime;
 use DBICTest;
 use DBIx::Class::ResultClass::HashRefInflator;
 my $schema = DBICTest->init_schema();
@@ -117,23 +115,3 @@ for my $index (0 .. $#hashrefinf) {
         is ($track->get_column ($col), $datahashref->{cds}{tracks}{$col}, "Correct track '$col'");
     }
 }
-
-# Test the data inflator
-
-$schema->class('CD')->inflate_column( 'year',
-    { inflate => sub { DateTime->new( year => shift ) },
-      deflate => sub { shift->year } }
-);
-
-my $cd_rs = $schema->resultset("CD")->search ({cdid => 3});
-$cd_rs->result_class('DBIx::Class::ResultClass::HashRefInflator');
-
-my $cd = $cd_rs->first;
-ok ( (not blessed $cd->{year}), "Plain string returned for year");
-is ( $cd->{year}, '1997', "We are looking at the right year");
-
-# try it again with inflation requested
-local $DBIx::Class::ResultClass::HashRefInflator::inflate_data = 1;
-my $cd2 = $cd_rs->first;
-isa_ok ($cd2->{year}, 'DateTime', "Inflated object");
-is ($cd2->{year}, DateTime->new ( year => 1997 ), "Correct year was inflated");

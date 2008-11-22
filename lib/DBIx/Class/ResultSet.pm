@@ -15,7 +15,7 @@ use List::Util ();
 use Scalar::Util ();
 use base qw/DBIx::Class/;
 
-__PACKAGE__->mk_group_accessors('simple' => qw/result_class _source_handle/);
+__PACKAGE__->mk_group_accessors('simple' => qw/_result_class _source_handle/);
 
 =head1 NAME
 
@@ -108,7 +108,6 @@ sub new {
   # see https://bugzilla.redhat.com/show_bug.cgi?id=196836
   my $self = {
     _source_handle => $source,
-    result_class => $attrs->{result_class} || $source->resolve->result_class,
     cond => $attrs->{where},
     count => undef,
     pager => undef,
@@ -116,6 +115,10 @@ sub new {
   };
 
   bless $self, $class;
+
+  $self->result_class(
+    $attrs->{result_class} || $source->resolve->result_class
+  );
 
   return $self;
 }
@@ -340,6 +343,9 @@ source for which column data is provided, including the primary key.
 
 If your table does not have a primary key, you B<must> provide a value for the
 C<key> attribute matching one of the unique constraints on the source.
+
+In addition to C<key>, L</find> recognizes and applies standard
+L<resultset attributes|/ATTRIBUTES> in the same way as L</search> does.
 
 Note: If your query does not return only one row, a warning is generated:
 
@@ -985,6 +991,14 @@ L<"table"|DBIx::Class::Manual::Glossary/"ResultSource"> class.
 
 =cut
 
+sub result_class {
+  my ($self, $result_class) = @_;
+  if ($result_class) {
+    $self->ensure_class_loaded($result_class);
+    $self->_result_class($result_class);
+  }
+  $self->_result_class;
+}
 
 =head2 count
 
@@ -2783,6 +2797,58 @@ with a father in the person table, we could explicitly use C<INNER JOIN>:
     # Equivalent SQL:
     # SELECT child.* FROM person child
     # INNER JOIN person father ON child.father_id = father.id
+
+If you need to express really complex joins or you need a subselect, you
+can supply literal SQL to C<from> via a scalar reference. In this case
+the contents of the scalar will replace the table name asscoiated with the
+resultsource.
+
+WARNING: This technique might very well not work as expected on chained
+searches - you have been warned.
+
+    # Assuming the Event resultsource is defined as:
+
+        MySchema::Event->add_columns (
+            sequence => {
+                data_type => 'INT',
+                is_auto_increment => 1,
+            },
+            location => {
+                data_type => 'INT',
+            },
+            type => {
+                data_type => 'INT',
+            },
+        );
+        MySchema::Event->set_primary_key ('sequence');
+
+    # This will get back the latest event for every location. The column
+    # selector is still provided by DBIC, all we do is add a JOIN/WHERE
+    # combo to limit the resultset
+
+    $rs = $schema->resultset('Event');
+    $table = $rs->result_source->name;
+    $latest = $rs->search (
+        undef,
+        { from => \ " 
+            (SELECT e1.* FROM $table e1 
+                JOIN $table e2 
+                    ON e1.location = e2.location 
+                    AND e1.sequence < e2.sequence 
+                WHERE e2.sequence is NULL 
+            ) me",
+        },
+    );
+
+    # Equivalent SQL (with the DBIC chunks added):
+
+    SELECT me.sequence, me.location, me.type FROM
+       (SELECT e1.* FROM events e1
+           JOIN events e2
+               ON e1.location = e2.location
+               AND e1.sequence < e2.sequence
+           WHERE e2.sequence is NULL
+       ) me;
 
 =head2 for
 

@@ -55,7 +55,7 @@ sub new {
   $new->{_relationships} = { %{$new->{_relationships}||{}} };
   $new->{name} ||= "!!NAME NOT SET!!";
   $new->{_columns_info_loaded} ||= 0;
-  $new->{sqlt_deploy_callback} ||= "default_sqlt_deploy_callback";
+  $new->{sqlt_deploy_callback} ||= "default_sqlt_deploy_hook";
   return $new;
 }
 
@@ -1147,7 +1147,7 @@ sub sqlt_deploy_hook {
   }
 }
 
-=head2 default_sqlt_deploy_callback($table)
+=head2 default_sqlt_deploy_hook($table)
 
 Delegates to a an optional C<sqlt_deploy_hook> method on the C<result_class>.
 
@@ -1159,7 +1159,7 @@ L<DBIx::Class::Manual::Cookbook/Adding Indexes And Functions To Your SQL>.
 
 =cut
 
-sub default_sqlt_deploy_callback {
+sub default_sqlt_deploy_hook {
   my $self = shift;
 
   my $class = $self->result_class;
@@ -1172,8 +1172,8 @@ sub default_sqlt_deploy_callback {
 =head2 sqlt_deploy_callback
 
 An attribute which contains the callback to trigger on C<sqlt_deploy_hook>.
-Defaults to C<default_sqlt_deploy_callback>. Can be a code reference or a
-method name.
+Defaults to C<default_sqlt_deploy_hook>. Can be a code reference or a method
+name.
 
 =head1 AUTHORS
 

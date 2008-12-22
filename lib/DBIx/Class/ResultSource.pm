@@ -1164,7 +1164,7 @@ sub default_sqlt_deploy_hook {
 
   my $class = $self->result_class;
 
-  if ($class and $class->result_class->can('sqlt_deploy_hook')) {
+  if ($class and $class->can('sqlt_deploy_hook')) {
     $class->sqlt_deploy_hook(@_);
   }
 }

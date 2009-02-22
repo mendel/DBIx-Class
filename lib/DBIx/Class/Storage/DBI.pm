@@ -171,6 +171,13 @@ sub _recurse_fields {
         .'( '.$self->_recurse_fields($fields->{$func}).' )';
     }
   }
+  # Is the second check absolutely necessary?
+  elsif ( $ref eq 'REF' and ref($$fields) eq 'ARRAY' ) {
+    return $self->_bind_to_sql( $fields );
+  }
+  else {
+    Carp::croak($ref . qq{ unexpected in _recurse_fields()})
+  }
 }
 
 sub _order_by {
@@ -259,10 +266,20 @@ sub _recurse_from {
   return join('', @sqlf);
 }
 
+sub _bind_to_sql {
+  my $self = shift;
+  my $arr  = shift;
+  my $sql = shift @$$arr;
+  $sql =~ s/\?/$self->_quote((shift @$$arr)->[1])/eg;
+  return $sql
+}
+
 sub _make_as {
   my ($self, $from) = @_;
-  return join(' ', map { (ref $_ eq 'SCALAR' ? $$_ : $self->_quote($_)) }
-                     reverse each %{$self->_skip_options($from)});
+  return join(' ', map { (ref $_ eq 'SCALAR' ? $$_ 
+                        : ref $_ eq 'REF'    ? $self->_bind_to_sql($_) 
+                        : $self->_quote($_)) 
+                       } reverse each %{$self->_skip_options($from)});
 }
 
 sub _skip_options {
@@ -1399,7 +1416,6 @@ sub _select_args {
     $attrs->{rows} = 2**48 if not defined $attrs->{rows} and defined $attrs->{offset};
     push @args, $attrs->{rows}, $attrs->{offset};
   }
-
   return @args;
 }
 

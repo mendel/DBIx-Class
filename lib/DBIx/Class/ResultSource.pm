@@ -29,6 +29,8 @@ DBIx::Class::ResultSource - Result source object
 A ResultSource is a component of a schema from which results can be directly
 retrieved, most usually a table (see L<DBIx::Class::ResultSource::Table>)
 
+Basic view support also exists, see L<<DBIx::Class::ResultSource::View>.
+
 =head1 METHODS
 
 =pod
@@ -1014,9 +1016,6 @@ sub reverse_relationship_info {
       $ret->{$otherrel} =  $otherrel_info;
     }
   }
-use Data::Dumper;
-#warn "return for reverse_relationship_info called on ".$self->name." for $rel:\n";
-#warn Dumper($ret);
   return $ret;
 }
 

@@ -48,6 +48,9 @@ __PACKAGE__->load_classes(qw/
   qw/SelfRefAlias TreeLike TwoKeyTreeLike Event EventTZ NoPrimaryKey/,
   qw/Collection CollectionObject TypedObject Owners BooksInLibrary/,
   qw/ForceForeign Encoded/,
+
+  # These are for RT#28451
+  ( '28451::Account', '28451::Group', '28451::Person' ),
 );
 
 sub sqlt_deploy_hook {

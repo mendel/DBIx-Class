@@ -7,7 +7,7 @@ use warnings;
 use base qw/DBIx::Class/;
 
 __PACKAGE__->load_components( qw/ Core PK::Auto / );
-__PACKAGE__->table( '28451_groups' );
+__PACKAGE__->table( 'rt28451_groups' );
 __PACKAGE__->add_columns( qw/ group_id name account_id / );
 __PACKAGE__->set_primary_key( qw/ group_id / );
 

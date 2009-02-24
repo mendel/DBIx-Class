@@ -10,7 +10,6 @@ use DBICTest;
 my $schema = DBICTest->init_schema(
     no_populate => 1,
 );
-$schema->storage()->debug( 1 );
 
 $schema->populate('28451::Account', [
     [ qw/account_id username person_id/ ],
@@ -32,18 +31,18 @@ $schema->populate('28451::Person', [
     [ 3, 'Barney', 2 ],
 ]);
 
-plan tests => 1;
+plan tests => 6;
 
 my $rs = $schema->resultset('28451::Group')->search(
     undef,
     {
-        '+select' => [ { COUNT => 'members.person_id' } ],
+        '+select' => [ \'COUNT(members.person_id) AS member_count' ],
         '+as'     => [ qw/ member_count / ],
         join      => [ 'members' ],
         group_by  => [ qw/ me.group_id / ],
+        order_by  => [ \'member_count DESC' ],
     },
 );
-warn ${$rs->as_query}->[0], $/;
 
 $rs = $rs->search(
     undef,
@@ -51,11 +50,11 @@ $rs = $rs->search(
         prefetch  => { account => 'person' },
     },
 );
-warn ${$rs->as_query}->[0], $/;
 
-foreach ( $rs->all() ) {
-     print "name:    " . $_->name() . "\n";
-     print "owner:   " . $_->account()->person()->first_name() . "\n";
-     print "members: " . $_->member_count() . "\n";
-     print "\n";
-}
+my @rows = $rs->all;
+is( $rows[0]->name, 'foo' );
+is( $rows[0]->account->person->first_name, 'Barney' );
+is( $rows[0]->member_count, '2' );
+is( $rows[1]->name, 'bar' );
+is( $rows[1]->account->person->first_name, 'Fred' );
+is( $rows[1]->member_count, '1' );

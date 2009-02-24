@@ -12,21 +12,21 @@ my $schema = DBICTest->init_schema(
 );
 $schema->storage()->debug( 1 );
 
-$schema->populate('DBICTest::Schema::28451::Account', [
+$schema->populate('28451::Account', [
     [ qw/account_id username person_id/ ],
     [ 1, 'barney', 3 ],
     [ 2, 'fred', 1 ],
 ]);
 
-$schema->populate('DBICTest::Schema::28451::Group', [
-    [ qw/account_id username person_id/ ],
+$schema->populate('28451::Group', [
+    [ qw/group_id name account_id/ ],
     [ 1, 'foo', 1 ],
     [ 2, 'bar', 2 ],
-    [ 3, 'baz', undef ],
+#    [ 3, 'baz', undef ],
 ]);
 
-$schema->populate('DBICTest::Schema::28451::Peron', [
-    [ qw/account_id username person_id/ ],
+$schema->populate('28451::Person', [
+    [ qw/person_id first_name group_id/ ],
     [ 1, 'Fred', 1 ],
     [ 2, 'Wilma', 1 ],
     [ 3, 'Barney', 2 ],
@@ -34,7 +34,7 @@ $schema->populate('DBICTest::Schema::28451::Peron', [
 
 plan tests => 1;
 
-my $rs = $schema->resultset('Group')->search(
+my $rs = $schema->resultset('28451::Group')->search(
     undef,
     {
         '+select' => [ { COUNT => 'members.person_id' } ],

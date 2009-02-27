@@ -1416,8 +1416,17 @@ sub _select_args {
     $attrs->{rows} = 2**48 if not defined $attrs->{rows} and defined $attrs->{offset};
     push @args, $attrs->{rows}, $attrs->{offset};
   }
+
+  # give DB specific DBI subclasses the chance to pass DB specific attributes to
+  # the spl_maker, without overriding the whole _select method
+  if (my $db_specific_attrs = $self->_db_specific_attrs($attrs) ) {
+    push @args, $db_specific_attrs;
+  }
+ 
   return @args;
 }
+
+sub _db_specific_attrs { undef }
 
 sub source_bind_attributes {
   my ($self, $source) = @_;

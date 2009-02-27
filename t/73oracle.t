@@ -39,7 +39,7 @@ plan skip_all => 'Set $ENV{DBICTEST_ORA_DSN}, _USER and _PASS to run this test. 
   ' as well as following sequences: \'pkid1_seq\', \'pkid2_seq\' and \'nonpkid_seq\''
   unless ($dsn && $user && $pass);
 
-plan tests => 24;
+plan tests => 34;
 
 DBICTest::Schema->load_classes('ArtistFQN');
 my $schema = DBICTest::Schema->connect($dsn, $user, $pass);
@@ -60,7 +60,10 @@ $dbh->do("CREATE SEQUENCE artist_seq START WITH 1 MAXVALUE 999999 MINVALUE 0");
 $dbh->do("CREATE SEQUENCE pkid1_seq START WITH 1 MAXVALUE 999999 MINVALUE 0");
 $dbh->do("CREATE SEQUENCE pkid2_seq START WITH 10 MAXVALUE 999999 MINVALUE 0");
 $dbh->do("CREATE SEQUENCE nonpkid_seq START WITH 20 MAXVALUE 999999 MINVALUE 0");
-$dbh->do("CREATE TABLE artist (artistid NUMBER(12), name VARCHAR(255), rank NUMBER(38), charfield VARCHAR2(10))");
+
+$dbh->do("CREATE TABLE artist (artistid NUMBER(12), name VARCHAR(255), parentid NUMBER(12), rank NUMBER(38), charfield VARCHAR2(10))");
+$schema->class('Artist')->add_columns('parentid');
+
 $dbh->do("CREATE TABLE sequence_test (pkid1 NUMBER(12), pkid2 NUMBER(12), nonpkid NUMBER(12), name VARCHAR(255))");
 $dbh->do("CREATE TABLE cd (cdid NUMBER(12), artist NUMBER(12), title VARCHAR(255), year VARCHAR(4))");
 $dbh->do("CREATE TABLE track (trackid NUMBER(12), cd NUMBER(12), position NUMBER(12), title VARCHAR(255), last_updated_on DATE)");
@@ -146,6 +149,104 @@ for (1..5) {
 }
 my $st = $schema->resultset('SequenceTest')->create({ name => 'foo', pkid1 => 55 });
 is($st->pkid1, 55, "Oracle Auto-PK without trigger: First primary key set manually");
+
+# create a tree of artists
+my $afoo_id = $schema->resultset('Artist')->create({ name => 'afoo', parentid => 1 })->id;
+$schema->resultset('Artist')->create({ name => 'bfoo', parentid => 1 });
+my $cfoo_id = $schema->resultset('Artist')->create({ name => 'cfoo', parentid => $afoo_id })->id;
+$schema->resultset('Artist')->create({ name => 'dfoo', parentid => $cfoo_id });
+my $xfoo_id = $schema->resultset('Artist')->create({ name => 'xfoo' })->id;
+
+# create some cds and tracks
+$schema->resultset('CD')->create({ cdid => 2, artist => $cfoo_id, title => "cfoo's cd", year => '2008' });
+$schema->resultset('Track')->create({ trackid => 2, cd => 2, position => 1, title => 'Track1 cfoo' });
+$schema->resultset('CD')->create({ cdid => 3, artist => $xfoo_id, title => "xfoo's cd", year => '2008' });
+$schema->resultset('Track')->create({ trackid => 3, cd => 3, position => 1, title => 'Track1 xfoo' });
+
+{
+  my $rs = $schema->resultset('Artist')->search({}, # get the whole tree
+                          {
+                            'start_with' => { 'name' => 'foo' },
+                            'connect_by' => { 'parentid' => 'prior artistid'},
+                          });
+  is( $rs->count, 5, 'Connect By count ok' );
+  my $ok = 1;
+  foreach my $node_name (qw(foo afoo cfoo dfoo bfoo)) {
+    $ok = 0 if $rs->next->name ne $node_name;
+  }
+  ok( $ok, 'got artist tree');
+}
+
+{
+  # use order siblings by statement
+  my $rs = $schema->resultset('Artist')->search({},
+                          {
+                            'start_with' => { 'name' => 'foo' },
+                            'connect_by' => { 'parentid' => 'prior artistid'},
+                            'order_siblings_by' => 'name DESC',
+                          });
+  my $ok = 1;
+  foreach my $node_name (qw(foo bfoo afoo cfoo dfoo)) {
+    $ok = 0 if $rs->next->name ne $node_name;
+  }
+  ok( $ok, 'Order Siblings By ok');
+}
+
+{
+  # get the root node
+  my $rs = $schema->resultset('Artist')->search({ parentid => undef },
+                          {
+                            'start_with' => { 'name' => 'dfoo' },
+                            'connect_by' => { 'prior parentid' => 'artistid'},
+                          });
+  is( $rs->count, 1, 'root node count ok' );
+  ok( $rs->next->name eq 'foo', 'found root node');
+}
+
+{
+  # combine a connect by with a join
+  my $rs = $schema->resultset('Artist')->search({'cds.title' => { 'like' => '%cd'}},
+                          {
+                            'join' => 'cds',
+                            'start_with' => { 'name' => 'foo' },
+                            'connect_by' => { 'parentid' => 'prior artistid'},
+                          });
+  is( $rs->count, 1, 'Connect By with a join; count ok' );
+  ok( $rs->next->name eq 'cfoo', 'Connect By with a join; result name ok')
+}
+
+{
+  # combine a connect by with order_by
+  my $rs = $schema->resultset('Artist')->search({},
+                          {
+                            'start_with' => { 'name' => 'dfoo' },
+                            'connect_by' => { 'prior parentid' => 'artistid'},
+                            'order_by' => 'name ASC',
+                          });
+  my $ok = 1;
+  foreach my $node_name (qw(afoo cfoo dfoo foo)) {
+    $ok = 0 if $rs->next->name ne $node_name;
+  }
+  ok( $ok, 'Connect By with a order_by; result name ok');
+}
+
+{
+  # limit a connect by
+  my $rs = $schema->resultset('Artist')->search({},
+                          {
+                            'start_with' => { 'name' => 'dfoo' },
+                            'connect_by' => { 'prior parentid' => 'artistid'},
+                            'order_by' => 'name ASC',
+                            'rows' => 2,
+                            'page' => 1,
+                          });
+  is( $rs->count(), 2, 'Connect By; LIMIT count ok' );
+  my $ok = 1;
+  foreach my $node_name (qw(afoo cfoo)) {
+    $ok = 0 if $rs->next->name ne $node_name;
+  }
+  ok( $ok, 'LIMIT a Connect By query ok');
+}
 
 # clean up our mess
 END {

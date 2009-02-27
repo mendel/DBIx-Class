@@ -6,7 +6,8 @@ use warnings;
 
 =head1 NAME
 
-DBIx::Class::Storage::DBI::Oracle::Generic - Automatic primary key class for Oracle
+DBIx::Class::Storage::DBI::Oracle::Generic - Automatic primary key class and
+connect_by support for Oracle
 
 =head1 SYNOPSIS
 
@@ -16,11 +17,66 @@ DBIx::Class::Storage::DBI::Oracle::Generic - Automatic primary key class for Ora
   __PACKAGE__->set_primary_key('id');
   __PACKAGE__->sequence('mysequence');
 
+  # with a resultset using a hierarchical relationship
+  my $rs = $schema->resultset('Person')->search({},
+                {
+                  'start_with' => { 'firstname' => 'Foo', 'lastname' => 'Bar' },
+                  'connect_by' => { 'parentid' => 'prior persionid'},
+                  'order_siblings_by' => 'firstname ASC',
+                };
+  );
+
 =head1 DESCRIPTION
 
-This class implements autoincrements for Oracle.
+This class implements autoincrements for Oracle and adds support for Oracle
+specific hierarchical queries.
 
 =head1 METHODS
+
+=head1 ATTRIBUTES
+
+Following additional attributes can be used in resultsets.
+
+=head2 connect_by
+
+=over 4
+
+=item Value: \%connect_by
+
+=back
+
+A hashref of conditions used to specify the relationship between parent rows
+and child rows of the hierarchy.
+
+  connect_by => { parentid => 'prior personid' }
+
+=head2 start_with
+
+=over 4
+
+=item Value: \%condition
+
+=back
+
+A hashref of conditions which specify the root row(s) of the hierarchy.
+
+It uses the same syntax as L<DBIx::Class::ResultSet/search>
+
+  start_with => { firstname => 'Foo', lastname => 'Bar' }
+
+=head2 order_siblings_by
+
+=over 4
+
+=item Value: ($order_siblings_by | \@order_siblings_by)
+
+=back
+
+Which column(s) to order the siblings by.
+
+It uses the same syntax as L<DBIx::Class::ResultSet/order_by>
+
+  'order_siblings_by' => 'firstname ASC'
 
 =cut
 
@@ -29,6 +85,90 @@ use Carp::Clan qw/^DBIx::Class/;
 use base qw/DBIx::Class::Storage::DBI::MultiDistinctEmulation/;
 
 # __PACKAGE__->load_components(qw/PK::Auto/);
+
+{
+  package 
+    DBIC::SQL::Abstract::Oracle;
+
+  use base qw( DBIC::SQL::Abstract );
+
+  sub select {
+    my ($self, $table, $fields, $where, $order, @rest) = @_;
+
+    $self->{_db_specific_attrs} = pop @rest;
+
+    my ($sql, @bind) = $self->SUPER::select($table, $fields, $where, $order, @rest);
+    push @bind, @{$self->{_oracle_connect_by_binds}};
+
+    return wantarray ? ($sql, @bind) : $sql;
+  }
+
+  sub _emulate_limit {
+    my ( $self, $syntax, $sql, $order, $rows, $offset ) = @_;
+
+    my ($cb_sql, @cb_bind) = $self->_connect_by();
+    $sql .= $cb_sql;
+    $self->{_oracle_connect_by_binds} = \@cb_bind;
+
+    return $self->SUPER::_emulate_limit($syntax, $sql, $order, $rows, $offset);
+  }
+
+  sub _connect_by {
+    my ($self) = @_;
+    my $attrs = $self->{_db_specific_attrs};
+    my $sql = '';
+    my @bind;
+
+    if ( ref($attrs) eq 'HASH' ) {
+      if ( $attrs->{'start_with'} ) {
+        my ($ws, @wb) = $self->_recurse_where( $attrs->{'start_with'} );
+        $sql .= $self->_sqlcase(' start with ') . $ws;
+        push @bind, @wb;
+      }
+      if ( my $connect_by = $attrs->{'connect_by'}) {
+        $sql .= $self->_sqlcase(' connect by');
+        foreach my $key ( keys %$connect_by ) {
+          $sql .= " $key = " . $connect_by->{$key};
+        }
+      }
+      if ( $attrs->{'order_siblings_by'} ) {
+        $sql .= $self->_order_siblings_by( $attrs->{'order_siblings_by'} );
+      }
+    }
+
+    return wantarray ? ($sql, @bind) : $sql;
+  }
+
+  sub _order_siblings_by {
+    my $self = shift;
+    my $ref = ref $_[0];
+
+    my @vals = $ref eq 'ARRAY'  ? @{$_[0]} :
+               $ref eq 'SCALAR' ? ${$_[0]} :
+               $ref eq ''       ? $_[0]    :
+               puke( "Unsupported data struct $ref for ORDER SIBILINGS BY" );
+
+    my $val = join ', ', map { $self->_quote($_) } @vals;
+    return $val ? $self->_sqlcase(' order siblings by')." $val" : '';
+  }
+}
+
+sub _db_specific_attrs {
+  my ($self, $attrs) = @_;
+
+  my $rv = {};
+  if ( $attrs->{connect_by} || $attrs->{start_with} || $attrs->{order_siblings_by} ) {
+    $rv = {
+      connect_by => $attrs->{connect_by},
+      start_with => $attrs->{start_with},
+      order_siblings_by => $attrs->{order_siblings_by},
+    }
+  }
+
+  return $rv;
+} # end of DBIC::SQL::Abstract::Oracle
+
+__PACKAGE__->sql_maker_class('DBIC::SQL::Abstract::Oracle');
 
 sub _dbh_last_insert_id {
   my ($self, $dbh, $source, @columns) = @_;

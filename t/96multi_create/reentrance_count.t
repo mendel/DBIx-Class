@@ -14,6 +14,9 @@ my $query_stats;
 $schema->storage->debugcb (sub { push @{$query_stats->{$_[0]}}, $_[1] });
 $schema->storage->debug (1);
 
+TODO: {
+  local $TODO = 'This is an optimization task, will wait... a while';
+
 lives_ok (sub {
   undef $query_stats;
   $schema->resultset('Artist')->create ({
@@ -171,5 +174,7 @@ lives_ok (sub {
   is ( @{$query_stats->{SELECT} || []}, 0, 'number of selects during creation of artist_object->cd->producer_object' )
     || $ENV{DBIC_MULTICREATE_DEBUG} && diag join "\n", @{$query_stats->{SELECT} || []};
 });
+
+}
 
 1;

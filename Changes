@@ -1,4 +1,9 @@
 Revision history for DBIx::Class
+
+0.08099_07 2009-02-27 02:00:00 (UTC)
+        - putting IC::DateTime locale, timezone or floating_tz_ok attributes into
+          extra => {} has been deprecated. The new way is to put these things
+          directly into the columns definition
         - multi-create using find_or_create rather than _related for post-insert
         - fix get_inflated_columns to check has_column_loaded
         - Add DBIC_MULTICREATE_DEBUG env var (undocumented, quasi-internal)
@@ -7,7 +12,7 @@ Revision history for DBIx::Class
           - not try and insert things tagged on via new_related unless required
         - Possible to set locale in IC::DateTime extra => {} config
         - Calling the accessor of a belongs_to when the foreign_key
-          was NULL and the row was not stored would unexpectedly fail (groditi)
+          was NULL and the row was not stored would unexpectedly fail 
         - Split sql statements for deploy only if SQLT::Producer returned a scalar
           containing all statements to be executed
         - Add as_query() for ResultSet and ResultSetColumn. This makes subqueries
@@ -15,7 +20,14 @@ Revision history for DBIx::Class
         - Massive rewrite of Ordered to properly handle position constraints and
           to make it more matpath-friendly
         - deploy_statements called ddl_filename with the $version and $dir arguments
-          in the wrong order. (groditi)
+          in the wrong order. 
+        - columns/+columns attributes now support { as => select } hahsrefs
+        - support for views both in DBIC and via deploy() in SQLT
+        - test for not dying if a column isn't loaded after insert and a rel using
+          it is called. (eg ->new({ name => 'foo'})->bar if bar uses bar_id)
+          - Currently skipped. Changed exception to have a more detailed message
+          - Document the known issue and a possible work around.
+        - search_like() now warns to indicate deprecation in 0.09. (robkinyon)
 
 0.08099_06 2009-01-23 07:30:00 (UTC)
         - Allow a scalarref to be supplied to the 'from' resultset attribute
@@ -30,12 +42,11 @@ Revision history for DBIx::Class
           (http://msdn.microsoft.com/en-us/library/ms190315.aspx)
         - an sqlt_deploy_hook can now be shared between result sources using
           a configurable callback trigger
-        - new order_by => { -desc => 'colname' } syntax supported with
-          SQLA >= 1.50
-        - PG array datatype supported with SQLA >= 1.50
+        - new order_by => { -desc => 'colname' } syntax supported
+        - PG array datatype supported
         - insert should use store_column, not set_column to avoid marking
-          clean just-stored values as dirty. New test for this (groditi)
-        - regression test for source_name (groditi)
+          clean just-stored values as dirty. New test for this 
+        - regression test for source_name 
 
 0.08099_05 2008-10-30 21:30:00 (UTC)
         - Rewritte of Storage::DBI::connect_info(), extended with an

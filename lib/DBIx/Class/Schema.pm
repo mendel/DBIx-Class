@@ -617,7 +617,7 @@ sub txn_do {
   $self->storage->txn_do(@_);
 }
 
-=head2 txn_scope_guard (EXPERIMENTAL)
+=head2 txn_scope_guard
 
 Runs C<txn_scope_guard> on the schema's storage. See 
 L<DBIx::Class::Storage/txn_scope_guard>.
@@ -1279,7 +1279,8 @@ sub _register_source {
 
   if ($source->result_class) {
     my %map = %{$self->class_mappings};
-    if (exists $map{$source->result_class}) {
+    if (exists $map{$source->result_class}
+            && $map{$source->result_class} ne $moniker) {
       warn $source->result_class . ' already has a source, use register_extra_source for additional sources';
     }
     $map{$source->result_class} = $moniker;

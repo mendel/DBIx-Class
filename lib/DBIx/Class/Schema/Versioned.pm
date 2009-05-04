@@ -533,7 +533,6 @@ sub _create_db_to_schema_diff {
   $db_tr->producer($db);
   my $dbic_tr = SQL::Translator->new;
   $dbic_tr->parser('SQL::Translator::Parser::DBIx::Class');
-  $dbic_tr = $self->storage->configure_sqlt($dbic_tr, $db);
   $dbic_tr->data($self);
   $dbic_tr->producer($db);
 
@@ -614,7 +613,7 @@ sub _source_exists
 
 =head1 AUTHORS
 
-Jess Robinson <castaway@desert-island.demon.co.uk>
+Jess Robinson <castaway@desert-island.me.uk>
 Luke Saunders <luke@shadowcatsystems.co.uk>
 
 =head1 LICENSE

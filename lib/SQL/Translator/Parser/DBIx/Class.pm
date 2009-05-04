@@ -246,6 +246,8 @@ sub parse {
         if ($source->result_class->can('sqlt_deploy_hook')) {
           $source->result_class->sqlt_deploy_hook($view);
         }
+
+        $source->_invoke_sqlt_deploy_hook($view);
     }
 
     if ($dbicschema->can('sqlt_deploy_hook')) {
@@ -291,14 +293,14 @@ C<SQL::Translator::Parser::DBIx::Class> reads a DBIx::Class schema,
 interrogates the columns, and stuffs it all in an $sqlt_schema object.
 
 It's primary use is in deploying database layouts described as a set
-of L<DBIx::Class> classes, to a database. To do this, see the
-L<DBIx::Class::Schema/deploy> method.
+of L<DBIx::Class> classes, to a database. To do this, see
+L<DBIx::Class::Schema/deploy>.
 
 This can also be achieved by having DBIx::Class export the schema as a
 set of SQL files ready for import into your database, or passed to
 other machines that need to have your application installed but don't
-have SQL::Translator installed. To do this see the
-L<DBIx::Class::Schema/create_ddl_dir> method.
+have SQL::Translator installed. To do this see
+L<DBIx::Class::Schema/create_ddl_dir>.
 
 =head1 SEE ALSO
 

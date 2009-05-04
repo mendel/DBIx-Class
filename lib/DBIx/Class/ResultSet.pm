@@ -102,6 +102,21 @@ another.
     });
   }
 
+=head3 Resolving conditions and attributes
+
+When a resultset is chained from another resultset, conditions and
+attributes with the same keys need resolving.
+
+L</join>, L</prefetch>, L</+select>, L</+as> attributes are merged
+into the existing ones from the original resultset.
+
+The L</where>, L</having> attribute, and any search conditions are
+merged with an SQL C<AND> to the existing condition from the original
+resultset.
+
+All other attributes are overridden by any new ones supplied in the
+search attributes.
+
 =head2 Multiple queries
 
 Since a resultset just defines a query, you can do all sorts of
@@ -264,6 +279,11 @@ always return a resultset, even in list context.
 sub search_rs {
   my $self = shift;
 
+  # Special-case handling for (undef, undef).
+  if ( @_ == 2 && !defined $_[1] && !defined $_[0] ) {
+    pop(@_); pop(@_);
+  }
+
   my $attrs = {};
   $attrs = pop(@_) if @_ > 1 and ref $_[$#_] eq 'HASH';
   my $our_attrs = { %{$self->{attrs}} };
@@ -373,19 +393,29 @@ Pass a literal chunk of SQL to be added to the conditional part of the
 resultset query.
 
 CAVEAT: C<search_literal> is provided for Class::DBI compatibility and should
-only be used in that context. There are known problems using C<search_literal>
-in chained queries; it can result in bind values in the wrong order.  See
-L<DBIx::Class::Manual::Cookbook/Searching> and
+only be used in that context. C<search_literal> is a convenience method. 
+It is equivalent to calling $schema->search(\[]), but if you want to ensure
+columns are bound correctly, use C<search>.
+
+Example of how to use C<search> instead of C<search_literal>
+
+  my @cds = $cd_rs->search_literal('cdid = ? AND (artist = ? OR artist = ?)', (2, 1, 2));
+  my @cds = $cd_rs->search(\[ 'cdid = ? AND (artist = ? OR artist = ?)', [ 'cdid', 2 ], [ 'artist', 1 ], [ 'artist', 2 ] ]);
+
+
+See L<DBIx::Class::Manual::Cookbook/Searching> and 
 L<DBIx::Class::Manual::FAQ/Searching> for searching techniques that do not
 require C<search_literal>.
 
 =cut
 
 sub search_literal {
-  my ($self, $cond, @vals) = @_;
-  my $attrs = (ref $vals[$#vals] eq 'HASH' ? { %{ pop(@vals) } } : {});
-  $attrs->{bind} = [ @{$self->{attrs}{bind}||[]}, @vals ];
-  return $self->search(\$cond, $attrs);
+  my ($self, $sql, @bind) = @_; 
+  my $attr;
+  if ( @bind && ref($bind[-1]) eq 'HASH' ) {
+    $attr = pop @bind;
+  }
+  return $self->search(\[ $sql, map [ __DUMMY__ => $_ ], @bind ], ($attr || () ));
 }
 
 =head2 find
@@ -830,10 +860,24 @@ You most likely want to use L</search> with specific operators.
 
 For more information, see L<DBIx::Class::Manual::Cookbook>.
 
+This method is deprecated and will be removed in 0.09. Use L</search()>
+instead. An example conversion is:
+
+  ->search_like({ foo => 'bar' });
+
+  # Becomes
+
+  ->search({ foo => { like => 'bar' } });
+
 =cut
 
 sub search_like {
   my $class = shift;
+  carp join ("\n",
+    'search_like() is deprecated and will be removed in 0.09.',
+    'Instead use ->search({ x => { -like => "y%" } })',
+    '(note the outer pair of {}s - they are important!)'
+  );
   my $attrs = (@_ > 1 && ref $_[$#_] eq 'HASH' ? pop(@_) : {});
   my $query = ref $_[0] eq 'HASH' ? { %{shift()} }: {@_};
   $query->{$_} = { 'like' => $query->{$_} } for keys %$query;
@@ -1076,6 +1120,11 @@ is derived.
 An accessor for the class to use when creating row objects. Defaults to 
 C<< result_source->result_class >> - which in most cases is the name of the 
 L<"table"|DBIx::Class::Manual::Glossary/"ResultSource"> class.
+
+Note that changing the result_class will also remove any components
+that were originally loaded in the source class via
+L<DBIx::Class::ResultSource/load_components>. Any overloaded methods
+in the original source class will not run.
 
 =cut
 
@@ -1636,6 +1685,9 @@ sub _normalize_populate_args {
 Return Value a L<Data::Page> object for the current resultset. Only makes
 sense for queries with a C<page> attribute.
 
+To get the full count of entries for a paged resultset, call
+C<total_entries> on the L<Data::Page> object.
+
 =cut
 
 sub pager {
@@ -1807,7 +1859,7 @@ sub _remove_alias {
   return \%unaliased;
 }
 
-=head2 as_query
+=head2 as_query (EXPERIMENTAL)
 
 =over 4
 
@@ -1820,6 +1872,8 @@ sub _remove_alias {
 Returns the SQL query and bind vars associated with the invocant.
 
 This is generally used as the RHS for a subquery.
+
+B<NOTE>: This feature is still experimental.
 
 =cut
 
@@ -2067,6 +2121,63 @@ sub update_or_create {
   return $self->create($cond);
 }
 
+=head2 update_or_new
+
+=over 4
+
+=item Arguments: \%col_values, { key => $unique_constraint }?
+
+=item Return Value: $rowobject
+
+=back
+
+  $resultset->update_or_new({ col => $val, ... });
+
+First, searches for an existing row matching one of the unique constraints
+(including the primary key) on the source of this resultset. If a row is
+found, updates it with the other given column values. Otherwise, instantiate
+a new result object and return it. The object will not be saved into your storage
+until you call L<DBIx::Class::Row/insert> on it.
+
+Takes an optional C<key> attribute to search on a specific unique constraint.
+For example:
+
+  # In your application
+  my $cd = $schema->resultset('CD')->update_or_new(
+    {
+      artist => 'Massive Attack',
+      title  => 'Mezzanine',
+      year   => 1998,
+    },
+    { key => 'cd_artist_title' }
+  );
+
+  if ($cd->in_storage) {
+      # the cd was updated
+  }
+  else {
+      # the cd is not yet in the database, let's insert it
+      $cd->insert;
+  }
+
+See also L</find>, L</find_or_create> and L<find_or_new>.
+
+=cut
+
+sub update_or_new {
+    my $self  = shift;
+    my $attrs = ( @_ > 1 && ref $_[$#_] eq 'HASH' ? pop(@_) : {} );
+    my $cond  = ref $_[0] eq 'HASH' ? shift : {@_};
+
+    my $row = $self->find( $cond, $attrs );
+    if ( defined $row ) {
+        $row->update($cond);
+        return $row;
+    }
+
+    return $self->new_result($cond);
+}
+
 =head2 get_cache
 
 =over 4
@@ -2293,12 +2404,20 @@ sub _resolved_attrs {
   # build columns (as long as select isn't set) into a set of as/select hashes
   unless ( $attrs->{select} ) {
       @colbits = map {
-          ( ref($_) eq 'HASH' ) ? $_
-            : {
-              (
-                  /^\Q${alias}.\E(.+)$/ ? $1
-                  : $_
-                ) => ( /\./ ? $_ : "${alias}.$_" )
+          ( ref($_) eq 'HASH' )
+              ? $_
+              : {
+                  (
+                    /^\Q${alias}.\E(.+)$/ 
+                      ? "$1"
+                      : "$_"
+                  )
+                => 
+                  (
+                    /\./ 
+                      ? "$_" 
+                      : "${alias}.$_"
+                  )
             }
       } ( ref($attrs->{columns}) eq 'ARRAY' ) ? @{ delete $attrs->{columns}} : (delete $attrs->{columns} || $source->columns );
   }
@@ -2555,22 +2674,26 @@ These are in no particular order:
 
 =over 4
 
-=item Value: ($order_by | \@order_by)
+=item Value: ( $order_by | \@order_by | \%order_by )
 
 =back
 
-Which column(s) to order the results by. This is currently passed
-through directly to SQL, so you can give e.g. C<year DESC> for a
-descending order on the column `year'.
+Which column(s) to order the results by. If a single column name, or
+an arrayref of names is supplied, the argument is passed through
+directly to SQL. The hashref syntax allows for connection-agnostic
+specification of ordering direction:
 
-Please note that if you have C<quote_char> enabled (see
-L<DBIx::Class::Storage::DBI/connect_info>) you will need to do C<\'year DESC' > to
-specify an order. (The scalar ref causes it to be passed as raw sql to the DB,
-so you will need to manually quote things as appropriate.)
+ For descending order:
 
-If your L<SQL::Abstract> version supports it (>=1.50), you can also use
-C<{-desc => 'year'}>, which takes care of the quoting for you. This is the
-recommended syntax.
+  order_by => { -desc => [qw/col1 col2 col3/] }
+
+ For explicit ascending order:
+
+  order_by => { -asc => 'col' }
+
+The old scalarref syntax (i.e. order_by => \'year DESC') is still
+supported, although you are strongly encouraged to use the hashref
+syntax as outlined above.
 
 =head2 columns
 
@@ -2850,6 +2973,10 @@ identical to creating a non-pages resultset and then calling ->page($page)
 on it.
 
 If L<rows> attribute is not specified it defualts to 10 rows per page.
+
+When you have a paged resultset, L</count> will only return the number
+of rows in the page. To get the total, use the L</pager> and call
+C<total_entries> on it.
 
 =head2 rows
 

@@ -26,5 +26,5 @@ my $rset_s   = DBICNSTest->resultset('S');
 my $row = $rset_s->new_result({});
 
 # check subclassing
-isa_ok($row, 'DBICNSTest::Result::A');
+isa_ok($row, 'DBICNSTest::S');
 ok($row->can('submethod'), 'method defined in rs subclass');

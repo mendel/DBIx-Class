@@ -25,6 +25,6 @@ isa_ok($source_s, 'DBIx::Class::ResultSource::Table');
 my $rset_s   = DBICNSTest->resultset('S');
 isa_ok($rset_s, 'DBICNSTest::Result::A');
 
-my $row = $rset_s->new({});
+my $row = $rset_s->new_result({});
 
 ok($row->can('submethod'), 'method defined in rs subclass');

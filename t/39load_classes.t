@@ -23,8 +23,8 @@ ok(!$@) or diag $@;
 my $source_s = DBICNSTest->source('S');
 isa_ok($source_s, 'DBIx::Class::ResultSource::Table');
 my $rset_s   = DBICNSTest->resultset('S');
-isa_ok($rset_s, 'DBICNSTest::Result::A');
-
 my $row = $rset_s->new_result({});
 
+# check subclassing
+isa_ok($row, 'DBICNSTest::Result::A');
 ok($row->can('submethod'), 'method defined in rs subclass');

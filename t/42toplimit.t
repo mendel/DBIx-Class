@@ -51,7 +51,8 @@ sub test_order {
   my $subquery = $sa->select( [{ subq => \['(SELECT * FROM foo)'] }], [qw{bar baz}], undef, undef, 1, 3);
   is_same_sql(
     $subquery,
-    "SELECT * FROM ( SELECT TOP 1 * FROM ( SELECT TOP 4 bar,baz FROM (SELECT * FROM foo) subq ORDER BY 1 ASC) AS foo ORDER BY 1 DESC) AS bar ORDER BY 1 ASC",);
+    "SELECT * FROM ( SELECT TOP 1 * FROM ( SELECT TOP 4 bar,baz FROM (SELECT * FROM foo) ) AS foo) AS bar",
+  );
 
   is (@w, 0, 'No warnings on limit with subquery')
     || diag join ("\n", @w);

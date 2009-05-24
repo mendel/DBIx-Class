@@ -5,6 +5,7 @@ use base qw/SQL::Abstract::Limit/;
 use strict;
 use warnings;
 use Carp::Clan qw/^DBIx::Class/;
+use Scalar::Util ();
 
 sub new {
   my $self = shift->SUPER::new(@_);
@@ -94,7 +95,6 @@ SQL
   return $sql;
 }
 
-
 # While we're at it, this should make LIMIT queries more efficient,
 #  without digging into things too deeply
 use Scalar::Util 'blessed';
@@ -130,11 +130,6 @@ sub select {
   @rest = (-1) unless defined $rest[0];
   croak "LIMIT 0 Does Not Compute" if $rest[0] == 0;
     # and anyway, SQL::Abstract::Limit will cause a barf if we don't first
-
-  if ($self->{limit_dialect} eq 'Top' && !defined($order)) {
-    $order = '1 ASC';
-  }
-
   my ($sql, @where_bind) = $self->SUPER::select(
     $table, $self->_recurse_fields($fields), $where, $order, @rest
   );
@@ -276,7 +271,18 @@ sub _order_directions {
       }
     } @{ $order }];
   }
-  return $self->SUPER::_order_directions($order);
+  
+  if (ref($order) && Scalar::Util::reftype($order) eq 'ARRAY'
+      && !@$order) {
+        $order = '';
+  }
+
+  my @dirs = $self->SUPER::_order_directions($order);
+
+  if (!defined($dirs[0]) && !defined($dirs[1])) {
+    return ('', '');
+  }
+  return @dirs;
 }
 
 sub _order_directions_hash {

@@ -130,6 +130,11 @@ sub select {
   @rest = (-1) unless defined $rest[0];
   croak "LIMIT 0 Does Not Compute" if $rest[0] == 0;
     # and anyway, SQL::Abstract::Limit will cause a barf if we don't first
+
+  if ($self->{limit_dialect} eq 'Top' && !defined($order)) {
+    $order = '1 ASC';
+  }
+
   my ($sql, @where_bind) = $self->SUPER::select(
     $table, $self->_recurse_fields($fields), $where, $order, @rest
   );

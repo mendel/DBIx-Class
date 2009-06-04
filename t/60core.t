@@ -9,7 +9,7 @@ use DBIC::SqlMakerTest;
 
 my $schema = DBICTest->init_schema();
 
-plan tests => 106;
+plan tests => 107;
 
 eval { require DateTime::Format::MySQL };
 my $NO_DTFM = $@ ? 1 : 0;
@@ -118,6 +118,13 @@ is($new_again->ID, 'DBICTest::Artist|artist|artistid=4', 'unique object id gener
 }
 
 is($schema->resultset("Artist")->count, 4, 'count ok');
+
+my $rs = $schema->resultset('CD')->search(undef, {
+    '+select' => 'year AS whosawhutsit',
+    '+as' => 'year',
+    having => 'whosawhustit > 1999'
+});
+ok($rs->count, 'count of query with having');
 
 # test find_or_new
 {

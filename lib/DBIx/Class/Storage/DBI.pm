@@ -907,6 +907,15 @@ sub _prep_for_execute {
   unshift(@bind,
     map { ref $_ eq 'ARRAY' ? $_ : [ '!!dummy', $_ ] } @$extra_bind)
       if $extra_bind;
+
+  for my $bind (@bind) {
+    my $val = $bind->[1];
+
+    if (Scalar::Util::blessed($val) && $val->isa('DateTime')) {
+      $bind->[1] = $self->datetime_parser->format_datetime($val);
+    }
+  }
+
   return ($sql, \@bind);
 }
 

@@ -11,6 +11,7 @@ use DBIx::Class::SQLAHacks;
 use DBIx::Class::Storage::DBI::Cursor;
 use DBIx::Class::Storage::Statistics;
 use Scalar::Util qw/blessed weaken/;
+use List::Util();
 
 __PACKAGE__->mk_group_accessors('simple' =>
     qw/_connect_info _dbi_connect_info _dbh _sql_maker _sql_maker_opts
@@ -1051,7 +1052,27 @@ sub insert_bulk {
     $sth->bind_param_array( $placeholder_index, [@data], $attributes );
     $placeholder_index++;
   }
-  my $rv = $sth->execute_array({ArrayTupleStatus => $tuple_status});
+  my $rv = eval { $sth->execute_array({ArrayTupleStatus => $tuple_status}) };
+  if (my $err = $@) {
+    my $i = 0;
+    ++$i while $i <= $#$tuple_status && !ref $tuple_status->[$i];
+
+    $self->throw_exception($sth->errstr || "Unexpected populate error: $err")
+      if ($i > $#$tuple_status);
+
+    require Data::Dumper;
+    local $Data::Dumper::Terse = 1;
+    local $Data::Dumper::Indent = 1;
+    local $Data::Dumper::Useqq = 1;
+    local $Data::Dumper::Quotekeys = 0;
+
+    $self->throw_exception(sprintf "%s for populate slice:\n%s",
+      $tuple_status->[$i][1],
+      Data::Dumper::Dumper(
+        { map { $cols->[$_] => $data->[$i][$_] } (0 .. $#$cols) }
+      ),
+    );
+  }
   $self->throw_exception($sth->errstr) if !$rv;
 
   $self->_query_end( $sql, @bind );
@@ -1142,6 +1163,9 @@ sub _per_row_update_delete {
 
   my $guard = $self->txn_scope_guard;
 
+  # emulate the return value of $sth->execute for non-selects
+  my $row_cnt = '0E0';
+
   my $subrs_cur = $rs->cursor;
   while (my @pks = $subrs_cur->next) {
 
@@ -1155,11 +1179,13 @@ sub _per_row_update_delete {
       $op eq 'update' ? $values : (),
       $cond,
     );
+
+    $row_cnt++;
   }
 
   $guard->commit;
 
-  return 1;
+  return $row_cnt;
 }
 
 sub _select {
@@ -1177,11 +1203,14 @@ sub _select_args {
   my $sql_maker = $self->sql_maker;
   $sql_maker->{for} = $for;
 
-  if (exists $attrs->{group_by} || $attrs->{having}) {
+  my @in_order_attrs = qw/group_by having _virtual_order_by/;
+  if (List::Util::first { exists $attrs->{$_} } (@in_order_attrs) ) {
     $order = {
-      group_by => $attrs->{group_by},
-      having => $attrs->{having},
-      ($order ? (order_by => $order) : ())
+      ($order
+        ? (order_by => $order)
+        : ()
+      ),
+      ( map { $_ => $attrs->{$_} } (@in_order_attrs) )
     };
   }
   my $bind_attrs = {}; ## Future support
@@ -1198,6 +1227,69 @@ sub _select_args {
     push @args, $attrs->{rows}, $attrs->{offset};
   }
   return @args;
+}
+
+sub count {
+  my ($self, $source, $attrs) = @_;
+
+  my $tmp_attrs = { %$attrs };
+
+  # take off any pagers, record_filter is cdbi, and no point of ordering a count
+  delete $tmp_attrs->{$_} for (qw/select as rows offset page order_by record_filter/);
+
+  # overwrite the selector
+  $tmp_attrs->{select} = { count => '*' };
+
+  my $tmp_rs = $source->resultset_class->new($source, $tmp_attrs);
+  my ($count) = $tmp_rs->cursor->next;
+
+  # if the offset/rows attributes are still present, we did not use
+  # a subquery, so we need to make the calculations in software
+  $count -= $attrs->{offset} if $attrs->{offset};
+  $count = $attrs->{rows} if $attrs->{rows} and $attrs->{rows} < $count;
+  $count = 0 if ($count < 0);
+
+  return $count;
+}
+
+sub count_grouped {
+  my ($self, $source, $attrs) = @_;
+
+  # copy for the subquery, we need to do some adjustments to it too
+  my $sub_attrs = { %$attrs };
+
+  # these can not go in the subquery, and there is no point of ordering it
+  delete $sub_attrs->{$_} for qw/prefetch collapse select as order_by/;
+
+  # if we prefetch, we group_by primary keys only as this is what we would get out of the rs via ->next/->all
+  # simply deleting group_by suffices, as the code below will re-fill it
+  # Note: we check $attrs, as $sub_attrs has collapse deleted
+  if (ref $attrs->{collapse} and keys %{$attrs->{collapse}} ) {
+    delete $sub_attrs->{group_by};
+  }
+
+  $sub_attrs->{group_by} ||= [ map { "$attrs->{alias}.$_" } ($source->primary_columns) ];
+  $sub_attrs->{select} = $self->_grouped_count_select ($sub_attrs);
+
+  $attrs->{from} = [{
+    count_subq => $source->resultset_class->new ($source, $sub_attrs )->as_query
+  }];
+
+  # the subquery replaces this
+  delete $attrs->{$_} for qw/where bind prefetch collapse group_by having having_bind rows offset page pager/;
+
+  return $self->count ($source, $attrs);
+}
+
+#
+# Returns a SELECT to go with a supplied GROUP BY
+# (caled by count_grouped so a group_by is present)
+# Most databases expect them to match, but some
+# choke in various ways.
+#
+sub _grouped_count_select {
+  my ($self, $attrs) = @_;
+  return $attrs->{group_by};
 }
 
 sub source_bind_attributes {
@@ -1387,7 +1479,7 @@ sub bind_attribute_by_data_type {
     return;
 }
 
-=head2 create_ddl_dir
+=head2 create_ddl_dir (EXPERIMENTAL)
 
 =over 4
 
@@ -1396,7 +1488,38 @@ sub bind_attribute_by_data_type {
 =back
 
 Creates a SQL file based on the Schema, for each of the specified
-database types, in the given directory.
+database engines in C<\@databases> in the given directory.
+(note: specify L<SQL::Translator> names, not L<DBI> driver names).
+
+Given a previous version number, this will also create a file containing
+the ALTER TABLE statements to transform the previous schema into the
+current one. Note that these statements may contain C<DROP TABLE> or
+C<DROP COLUMN> statements that can potentially destroy data.
+
+The file names are created using the C<ddl_filename> method below, please
+override this method in your schema if you would like a different file
+name format. For the ALTER file, the same format is used, replacing
+$version in the name with "$preversion-$version".
+
+See L<SQL::Translator/METHODS> for a list of values for C<\%sqlt_args>.
+The most common value for this would be C<< { add_drop_table => 1 } >>
+to have the SQL produced include a C<DROP TABLE> statement for each table
+created. For quoting purposes supply C<quote_table_names> and
+C<quote_field_names>.
+
+If no arguments are passed, then the following default values are assumed:
+
+=over 4
+
+=item databases  - ['MySQL', 'SQLite', 'PostgreSQL']
+
+=item version    - $schema->schema_version
+
+=item directory  - './'
+
+=item preversion - <none>
+
+=back
 
 By default, C<\%sqlt_args> will have
 
@@ -1406,6 +1529,12 @@ merged with the hash passed in. To disable any of those features, pass in a
 hashref like the following
 
  { ignore_constraint_names => 0, # ... other options }
+
+
+Note that this feature is currently EXPERIMENTAL and may not work correctly 
+across all databases, or fully handle complex relationships.
+
+WARNING: Please check all SQL files created, before applying them.
 
 =cut
 
@@ -1542,8 +1671,9 @@ sub create_ddl_dir {
 =back
 
 Returns the statements used by L</deploy> and L<DBIx::Class::Schema/deploy>.
-The database driver name is given by C<$type>, though the value from
-L</sqlt_type> is used if it is not specified.
+
+The L<SQL::Translator> (not L<DBI>) database driver name can be explicitly
+provided in C<$type>, otherwise the result of L</sqlt_type> is used as default.
 
 C<$directory> is used to return statements from files in a previously created
 L</create_ddl_dir> directory and is optional. The filenames are constructed
@@ -1611,7 +1741,7 @@ sub deploy {
     }
     $self->_query_end($line);
   };
-  my @statements = $self->deployment_statements($schema, $type, undef, $dir, { no_comments => 1, %{ $sqltargs || {} } } );
+  my @statements = $self->deployment_statements($schema, $type, undef, $dir, { %{ $sqltargs || {} }, no_comments => 1 } );
   if (@statements > 1) {
     foreach my $statement (@statements) {
       $deploy->( $statement );

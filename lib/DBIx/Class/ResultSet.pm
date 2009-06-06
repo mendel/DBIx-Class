@@ -661,6 +661,8 @@ sub cursor {
   my ($self) = @_;
 
   my $attrs = $self->_resolved_attrs_copy;
+  $attrs->{_virtual_order_by} = $self->_gen_virtual_order;
+
   return $self->{cursor}
     ||= $self->result_source->storage->select($attrs->{from}, $attrs->{select},
           $attrs->{where},$attrs);
@@ -712,6 +714,8 @@ sub single {
   }
 
   my $attrs = $self->_resolved_attrs_copy;
+  $attrs->{_virtual_order_by} = $self->_gen_virtual_order;
+
   if ($where) {
     if (defined $attrs->{where}) {
       $attrs->{where} = {
@@ -736,6 +740,16 @@ sub single {
   );
 
   return (@data ? ($self->_construct_object(@data))[0] : undef);
+}
+
+# _gen_virtual_order
+#
+# This is a horrble hack, but seems like the best we can do at this point
+# Some limit emulations (Top) require an ordered resultset in order to 
+# function at all. So supply a PK order to be used if necessary
+
+sub _gen_virtual_order {
+  return [ shift->result_source->primary_columns ];
 }
 
 # _is_unique_query
@@ -1141,88 +1155,15 @@ sub count {
   return $self->search(@_)->count if @_ and defined $_[0];
   return scalar @{ $self->get_cache } if $self->get_cache;
 
-  my @grouped_subq_attrs = qw/prefetch collapse distinct group_by having/;
-  my @subq_attrs = ();
-  
-  my $attrs = $self->_resolved_attrs;
-  # if we are not paged - we are simply asking for a limit
-  if (not $attrs->{page} and not $attrs->{software_limit}) {
-    push @subq_attrs, qw/rows offset/;
-  }
-
-  my $need_subq = $self->_has_attr (@subq_attrs);
-  my $need_group_subq = $self->_has_attr (@grouped_subq_attrs);
-
-  return ($need_subq || $need_group_subq)
-    ? $self->_count_subq ($need_group_subq)
-    : $self->_count_simple
-}
-
-sub _count_subq {
-  my ($self, $add_group_by) = @_;
+  my $meth = $self->_has_attr (qw/prefetch collapse distinct group_by/)
+    ? 'count_grouped'
+    : 'count'
+  ;
 
   my $attrs = $self->_resolved_attrs_copy;
+  my $rsrc = $self->result_source;
 
-  # copy for the subquery, we need to do some adjustments to it too
-  my $sub_attrs = { %$attrs };
-
-  # these can not go in the subquery, and there is no point of ordering it
-  delete $sub_attrs->{$_} for qw/prefetch collapse select +select as +as columns +columns order_by/;
-
-  # if needed force a group_by and the same set of columns (most databases require this)
-  if ($add_group_by) {
-
-    # if we prefetch, we group_by primary keys only as this is what we would get out of the rs via ->next/->all
-    # simply deleting group_by suffices, as the code below will re-fill it
-    # Note: we check $attrs, as $sub_attrs has collapse deleted
-    if (ref $attrs->{collapse} and keys %{$attrs->{collapse}} ) { 
-      delete $sub_attrs->{group_by};
-    }
-
-    $sub_attrs->{columns} = $sub_attrs->{group_by} ||= [ map { "$attrs->{alias}.$_" } ($self->result_source->primary_columns) ];
-  }
-
-  $attrs->{from} = [{
-    count_subq => (ref $self)->new ($self->result_source, $sub_attrs )->as_query
-  }];
-
-  # the subquery replaces this
-  delete $attrs->{$_} for qw/where bind prefetch collapse distinct group_by having having_bind/;
-
-  return $self->__count ($attrs);
-}
-
-sub _count_simple {
-  my $self = shift;
-
-  my $count = $self->__count;
-  return 0 unless $count;
-
-  # need to take offset from resolved attrs
-
-  my $attrs = $self->_resolved_attrs;
-
-  $count -= $attrs->{offset} if $attrs->{offset};
-  $count = $attrs->{rows} if $attrs->{rows} and $attrs->{rows} < $count;
-  $count = 0 if ($count < 0);
-  return $count;
-}
-
-sub __count {
-  my ($self, $attrs) = @_;
-
-  $attrs ||= $self->_resolved_attrs_copy;
-
-  # take off any column specs, any pagers, record_filter is cdbi, and no point of ordering a count
-  delete $attrs->{$_} for (qw/columns +columns select +select as +as rows offset page pager order_by record_filter/); 
-
-  $attrs->{select} = { count => '*' };
-  $attrs->{as} = [qw/count/];
-
-  my $tmp_rs = (ref $self)->new($self->result_source, $attrs);
-  my ($count) = $tmp_rs->cursor->next;
-
-  return $count;
+  return $rsrc->storage->$meth ($rsrc, $attrs);
 }
 
 sub _bool {
@@ -1513,7 +1454,7 @@ sub update_all {
 
 =item Arguments: none
 
-=item Return Value: 1
+=item Return Value: $storage_rv
 
 =back
 
@@ -1521,11 +1462,8 @@ Deletes the contents of the resultset from its result source. Note that this
 will not run DBIC cascade triggers. See L</delete_all> if you need triggers
 to run. See also L<DBIx::Class::Row/delete>.
 
-delete may not generate correct SQL for a query with joins or a resultset
-chained from a related resultset.  In this case it will generate a warning:-
-
-In these cases you may find that delete_all is more appropriate, or you
-need to respecify your query in a way that can be expressed without a join.
+Return value will be the amount of rows deleted; exact type of return value
+is storage-dependent.
 
 =cut
 
@@ -1654,13 +1592,19 @@ sub populate {
 
     ## do the belongs_to relationships
     foreach my $index (0..$#$data) {
-      if( grep { !defined $data->[$index]->{$_} } @pks ) {
-        my @ret = $self->populate($data);
-        return;
+
+      # delegate to create() for any dataset without primary keys with specified relationships
+      if (grep { !defined $data->[$index]->{$_} } @pks ) {
+        for my $r (@rels) {
+          if (grep { ref $data->[$index]{$r} eq $_ } qw/HASH ARRAY/) {  # a related set must be a HASH or AoH
+            my @ret = $self->populate($data);
+            return;
+          }
+        }
       }
 
       foreach my $rel (@rels) {
-        next unless $data->[$index]->{$rel} && ref $data->[$index]->{$rel} eq "HASH";
+        next unless ref $data->[$index]->{$rel} eq "HASH";
         my $result = $self->related_resultset($rel)->create($data->[$index]->{$rel});
         my ($reverse) = keys %{$self->result_source->reverse_relationship_info($rel)};
         my $related = $result->result_source->_resolve_condition(
@@ -2493,7 +2437,7 @@ sub _resolve_from {
   my $from = $attrs->{from}
     || [ { $attrs->{alias} => $source->from } ];
 
-  my $seen = { %{$attrs->{seen_join}||{}} };
+  my $seen = { %{$attrs->{seen_join} || {} } };
 
   # we need to take the prefetch the attrs into account before we
   # ->_resolve_join as otherwise they get lost - captainL

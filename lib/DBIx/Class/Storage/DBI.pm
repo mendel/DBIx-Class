@@ -1993,19 +1993,20 @@ sub _execute_single_statement {
   if($statement) {
     return $self->dbh_do(sub {
       my ($storage, $dbh, $schema, $statement) = @_;
-	  my $return;
-	  $schema->_query_start($statement);
-	  eval {
+      my $return;
+      $schema->_query_start($statement);
+      eval {
         $return = $dbh->do($statement)
           || $schema->throw_exception("Can't execute line: $statement, Error: ". $dbh->errstr);		
-	  }; 
-	  if($@) {
-		carp "$@ (running $statement)";
-	  }
+      };
+      if($@) {
+        carp "$@ (running $statement)";
+      }
       $schema->_query_end($statement);
-	  return $return;
+      return $return;
     }, $self, $statement);
-  } else {
+  }
+  else {
     $self->debugobj->print("No statement to execute!")
      if $self->debug;
     return;

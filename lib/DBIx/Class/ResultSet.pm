@@ -1927,7 +1927,13 @@ B<NOTE>: This feature is still experimental.
 
 sub as_query {
   my $self = shift;
-  return $self->result_source->storage->as_query($self->_resolved_attrs);
+
+  my $attrs = $self->_resolved_attrs_copy;
+
+  my ($sqlbind, $bind_attrs) = $self->result_source->storage
+    ->_select_args_to_query ($attrs->{from}, $attrs->{select}, $attrs->{where}, $attrs);
+
+  return $sqlbind;
 }
 
 =head2 find_or_new
@@ -2430,12 +2436,15 @@ sub _resolve_from {
   my $source = $self->result_source;
   my $attrs = $self->{attrs};
 
-  my $from = $attrs->{from}
-    || [ {
-      -result_source => $source,
-      -alias => $attrs->{alias},
-      $attrs->{alias} => $source->from,
-    } ];
+  my $from = [ @{
+      $attrs->{from}
+        ||
+      [{
+        -source_handle => $source->handle,
+        -alias => $attrs->{alias},
+        $attrs->{alias} => $source->from,
+      }]
+  }];
 
   my $seen = { %{$attrs->{seen_join} || {} } };
 
@@ -2541,7 +2550,7 @@ sub _resolved_attrs {
   }
 
   $attrs->{from} ||= [ {
-    -result_source => $source,
+    -source_handle => $source->handle,
     -alias => $self->{attrs}{alias},
     $self->{attrs}{alias} => $source->from,
   } ];
@@ -3278,9 +3287,21 @@ with a father in the person table, we could explicitly use C<INNER JOIN>:
     # SELECT child.* FROM person child
     # INNER JOIN person father ON child.father_id = father.id
 
-If you need to express really complex joins or you need a subselect, you
+You can select from a subquery by passing a resultset to from as follows.
+
+    $schema->resultset('Artist')->search( 
+        undef, 
+        {   alias => 'artist2',
+            from  => [ { artist2 => $artist_rs->as_query } ],
+        } );
+
+    # and you'll get sql like this..
+    # SELECT artist2.artistid, artist2.name, artist2.rank, artist2.charfield FROM 
+    #   ( SELECT me.artistid, me.name, me.rank, me.charfield FROM artists me ) artist2
+
+If you need to express really complex joins, you
 can supply literal SQL to C<from> via a scalar reference. In this case
-the contents of the scalar will replace the table name asscoiated with the
+the contents of the scalar will replace the table name associated with the
 resultsource.
 
 WARNING: This technique might very well not work as expected on chained

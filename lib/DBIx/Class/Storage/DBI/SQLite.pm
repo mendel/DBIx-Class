@@ -6,7 +6,7 @@ use POSIX 'strftime';
 use File::Copy;
 use File::Spec;
 
-use base qw/DBIx::Class::Storage::DBI::MultiDistinctEmulation/;
+use base qw/DBIx::Class::Storage::DBI/;
 
 sub _dbh_last_insert_id {
   my ($self, $dbh, $source, $col) = @_;
@@ -45,20 +45,7 @@ sub backup
   return $backupfile;
 }
 
-sub disconnect {
-
-  # As described in this node http://www.perlmonks.org/?node_id=666210
-  # there seems to be no sane way to ->disconnect a SQLite database with
-  # cached statement handles. As per mst we just zap the cache and 
-  # proceed as normal.
-
-  my $self = shift;
-  if ($self->connected) {
-    $self->_dbh->{CachedKids} = {};
-    $self->next::method (@_);
-  }
-}
-
+sub datetime_parser_type { return "DateTime::Format::SQLite"; } 
 
 1;
 

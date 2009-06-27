@@ -710,7 +710,21 @@ sub make_column_dirty {
 
   $self->throw_exception( "No such column '${column}'" )
     unless exists $self->{_column_data}{$column} || $self->has_column($column);
+
+  # the entire clean/dirty code relieas on exists, not on true/false
+  return 1 if exists $self->{_dirty_columns}{$column};
+
   $self->{_dirty_columns}{$column} = 1;
+
+  # if we are just now making the column dirty, and if there is an inflated
+  # value, force it over the deflated one
+  if (exists $self->{_inflated_column}{$column}) {
+    $self->store_column($column,
+      $self->_deflated_column(
+        $column, $self->{_inflated_column}{$column}
+      )
+    );
+  }
 }
 
 =head2 get_inflated_columns
@@ -911,7 +925,11 @@ sub set_inflated_columns {
 
 Inserts a new row into the database, as a copy of the original
 object. If a hashref of replacement data is supplied, these will take
-precedence over data in the original.
+precedence over data in the original. Also any columns which have
+the L<column info attribute|DBIx::Class::ResultSource/add_columns>
+C<< is_auto_increment => 1 >> are explicitly removed before the copy,
+so that the database can insert its own autoincremented values into
+the new object.
 
 Relationships will be followed by the copy procedure B<only> if the
 relationship specifes a true value for its

@@ -8,7 +8,7 @@ use DBICTest;
 
 my $schema = DBICTest->init_schema();
 
-plan tests => 78;
+plan tests => 85;
 
 # has_a test
 my $cd = $schema->resultset("CD")->find(4);
@@ -309,3 +309,14 @@ is($cds->count, 1, "subjoins under left joins force_left (arrayref)");
 
 $cds = $schema->resultset("CD")->search({ 'me.cdid' => 5 }, { join => { single_track => { cd => {} } } });
 is($cds->count, 1, "subjoins under left joins force_left (hashref)");
+
+$artist = $schema->resultset("Artist")->create({ name => 'Michael Jackson' });
+foreach my $year (1975..1985) {
+  $artist->create_related('cds', { year => $year, title => 'Compilation from ' . $year });
+}
+
+my @cds_80s = $artist->cds_80s;
+
+is(@cds_80s, 6, '6 80s cds found');
+
+map { ok($_->year < 1990 && $_->year > 1979) } @cds_80s;

@@ -9,6 +9,8 @@ use File::Temp ();
 use DBICTest;
 use DBICTest::Schema;
 
+plan skip_all => 'Fails on mac os *only*. Devs notified. Do not enable.';
+
 plan tests => 2;
 my $wait_for = 10;  # how many seconds to wait
 

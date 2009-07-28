@@ -15,10 +15,11 @@ __PACKAGE__->add_columns(
     },
     'link' => {
         data_type => 'integer',
+        is_nullable => 1,
     },
 );
 
 __PACKAGE__->set_primary_key('id');
-__PACKAGE__->belongs_to(link => 'DBICTest::Schema::Link' );
+__PACKAGE__->belongs_to(link => 'DBICTest::Schema::Link', 'link', { on_delete => 'SET NULL' } );
 
 1;

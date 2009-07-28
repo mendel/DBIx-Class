@@ -3,7 +3,11 @@ package DBIx::Class::Storage::DBI::Sybase;
 use strict;
 use warnings;
 
-use base qw/DBIx::Class::Storage::DBI::NoBindVars/;
+use base qw/
+    DBIx::Class::Storage::DBI::Sybase::Base
+    DBIx::Class::Storage::DBI::NoBindVars
+/;
+use mro 'c3';
 
 sub _rebless {
     my $self = shift;
@@ -17,6 +21,11 @@ sub _rebless {
             $self->_rebless;
         }
     }
+}
+
+sub _dbh_last_insert_id {
+    my ($self, $dbh, $source, $col) = @_;
+    return ($dbh->selectrow_array('select @@identity'))[0];
 }
 
 1;

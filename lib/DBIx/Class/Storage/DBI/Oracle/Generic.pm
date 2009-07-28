@@ -5,7 +5,7 @@ use warnings;
 
 =head1 NAME
 
-DBIx::Class::Storage::DBI::Oracle::Generic - Automatic primary key class for Oracle
+DBIx::Class::Storage::DBI::Oracle::Generic - Oracle Support for DBIx::Class
 
 =head1 SYNOPSIS
 
@@ -24,7 +24,7 @@ This class implements autoincrements for Oracle.
 =cut
 
 use base qw/DBIx::Class::Storage::DBI/;
-use Carp::Clan qw/^DBIx::Class/;
+use mro 'c3';
 
 # For ORA_BLOB => 113, ORA_CLOB => 112
 use DBD::Oracle qw( :ora_types );
@@ -52,7 +52,7 @@ sub _dbh_get_autoinc_seq {
   };
 
   # trigger_body is a LONG
-  $dbh->{LongReadLen} = 64 * 1024 if ($dbh->{LongReadLen} < 64 * 1024);
+  local $dbh->{LongReadLen} = 64 * 1024 if ($dbh->{LongReadLen} < 64 * 1024);
 
   my $sth;
 
@@ -83,36 +83,18 @@ sub _sequence_fetch {
   return $id;
 }
 
-=head2 connected
-
-Returns true if we have an open (and working) database connection, false if it is not (yet)
-open (or does not work). (Executes a simple SELECT to make sure it works.)
-
-The reason this is needed is that L<DBD::Oracle>'s ping() does not do a real
-OCIPing but just gets the server version, which doesn't help if someone killed
-your session.
-
-=cut
-
-sub connected {
+sub _ping {
   my $self = shift;
 
-  if (not $self->SUPER::connected(@_)) {
-    return 0;
-  }
-  else {
-    my $dbh = $self->_dbh;
+  my $dbh = $self->_dbh or return 0;
 
-    local $dbh->{RaiseError} = 1;
+  local $dbh->{RaiseError} = 1;
 
-    eval {
-      my $ping_sth = $dbh->prepare_cached("select 1 from dual");
-      $ping_sth->execute;
-      $ping_sth->finish;
-    };
+  eval {
+    $dbh->do("select 1 from dual");
+  };
 
-    return $@ ? 0 : 1;
-  }
+  return $@ ? 0 : 1;
 }
 
 sub _dbh_execute {
@@ -127,9 +109,9 @@ sub _dbh_execute {
     do {
       eval {
         if ($wantarray) {
-          @res    = $self->SUPER::_dbh_execute(@_);
+          @res    = $self->next::method(@_);
         } else {
-          $res[0] = $self->SUPER::_dbh_execute(@_);
+          $res[0] = $self->next::method(@_);
         }
       };
       $exception = $@;
@@ -157,7 +139,7 @@ Returns the sequence name for an autoincrement column
 
 sub get_autoinc_seq {
   my ($self, $source, $col) = @_;
-    
+
   $self->dbh_do('_dbh_get_autoinc_seq', $source, $col);
 }
 
@@ -183,9 +165,53 @@ L<DBIx::Class::InflateColumn::DateTime>.
 
 sub datetime_parser_type { return "DateTime::Format::Oracle"; }
 
+=head2 connect_call_datetime_setup
+
+Used as:
+
+    on_connect_call => 'datetime_setup'
+
+In L<DBIx::Class::Storage::DBI/connect_info> to set the session nls date, and
+timestamp values for use with L<DBIx::Class::InflateColumn::DateTime> and the
+necessary environment variables for L<DateTime::Format::Oracle>, which is used
+by it.
+
+Maximum allowable precision is used, unless the environment variables have
+already been set.
+
+These are the defaults used:
+
+  $ENV{NLS_DATE_FORMAT}         ||= 'YYYY-MM-DD HH24:MI:SS';
+  $ENV{NLS_TIMESTAMP_FORMAT}    ||= 'YYYY-MM-DD HH24:MI:SS.FF';
+  $ENV{NLS_TIMESTAMP_TZ_FORMAT} ||= 'YYYY-MM-DD HH24:MI:SS.FF TZHTZM';
+
+To get more than second precision with L<DBIx::Class::InflateColumn::DateTime>
+for your timestamps, use something like this:
+
+  use Time::HiRes 'time';
+  my $ts = DateTime->from_epoch(epoch => time);
+
+=cut
+
+sub connect_call_datetime_setup {
+  my $self = shift;
+
+  my $date_format = $ENV{NLS_DATE_FORMAT} ||= 'YYYY-MM-DD HH24:MI:SS';
+  my $timestamp_format = $ENV{NLS_TIMESTAMP_FORMAT} ||=
+    'YYYY-MM-DD HH24:MI:SS.FF';
+  my $timestamp_tz_format = $ENV{NLS_TIMESTAMP_TZ_FORMAT} ||=
+    'YYYY-MM-DD HH24:MI:SS.FF TZHTZM';
+
+  $self->_do_query("alter session set nls_date_format = '$date_format'");
+  $self->_do_query(
+"alter session set nls_timestamp_format = '$timestamp_format'");
+  $self->_do_query(
+"alter session set nls_timestamp_tz_format='$timestamp_tz_format'");
+}
+
 sub _svp_begin {
     my ($self, $name) = @_;
- 
+
     $self->dbh->do("SAVEPOINT $name");
 }
 
@@ -241,11 +267,9 @@ sub _svp_rollback {
     $self->dbh->do("ROLLBACK TO SAVEPOINT $name")
 }
 
-=head1 AUTHORS
+=head1 AUTHOR
 
-Andy Grundman <andy@hybridized.org>
-
-Scott Connelly <scottsweep@yahoo.com>
+See L<DBIx::Class/CONTRIBUTORS>.
 
 =head1 LICENSE
 

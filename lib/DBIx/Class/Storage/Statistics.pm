@@ -16,7 +16,7 @@ DBIx::Class::Storage::Statistics - SQL Statistics
 =head1 DESCRIPTION
 
 This class is called by DBIx::Class::Storage::DBI as a means of collecting
-statistics on it's actions.  Using this class alone merely prints the SQL
+statistics on its actions.  Using this class alone merely prints the SQL
 executed, the fact that it completes and begin/end notification for
 transactions.
 
@@ -89,6 +89,8 @@ Called when a transaction begins.
 sub txn_begin {
   my $self = shift;
 
+  return if $self->callback;
+
   $self->print("BEGIN WORK\n");
 }
 
@@ -99,6 +101,8 @@ Called when a transaction is rolled back.
 =cut
 sub txn_rollback {
   my $self = shift;
+
+  return if $self->callback;
 
   $self->print("ROLLBACK\n");
 }
@@ -111,6 +115,8 @@ Called when a transaction is committed.
 sub txn_commit {
   my $self = shift;
 
+  return if $self->callback;
+
   $self->print("COMMIT\n");
 }
 
@@ -121,6 +127,8 @@ Called when a savepoint is created.
 =cut
 sub svp_begin {
   my ($self, $name) = @_;
+
+  return if $self->callback;
 
   $self->print("SAVEPOINT $name\n");
 }
@@ -133,7 +141,9 @@ Called when a savepoint is released.
 sub svp_release {
   my ($self, $name) = @_;
 
- $self->print("RELEASE SAVEPOINT $name\n");
+  return if $self->callback;
+
+  $self->print("RELEASE SAVEPOINT $name\n");
 }
 
 =head2 svp_rollback
@@ -144,7 +154,9 @@ Called when rolling back to a savepoint.
 sub svp_rollback {
   my ($self, $name) = @_;
 
- $self->print("ROLLBACK TO SAVEPOINT $name\n");
+  return if $self->callback;
+
+  $self->print("ROLLBACK TO SAVEPOINT $name\n");
 }
 
 =head2 query_start

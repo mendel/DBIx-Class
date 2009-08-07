@@ -5,8 +5,6 @@ use warnings;
 
 use base qw/DBIx::Class::ResultSourceProxy/;
 
-use DBIx::Class::ResultSource::Table;
-
 __PACKAGE__->mk_classdata(table_class => 'DBIx::Class::ResultSource::Table');
 
 __PACKAGE__->mk_classdata('table_alias'); # FIXME: Doesn't actually do
@@ -22,8 +20,11 @@ sub _init_result_source_instance {
     my $class_has_table_instance = ($table and $table->result_class eq $class);
     return $table if $class_has_table_instance;
 
+    my $table_class = $class->table_class;
+    $class->ensure_class_loaded($table_class);
+
     if( $table ) {
-        $table = $class->table_class->new({
+        $table = $table_class->new({
             %$table,
             result_class => $class,
             source_name => undef,
@@ -31,7 +32,7 @@ sub _init_result_source_instance {
         });
     }
     else {
-        $table = $class->table_class->new({
+        $table = $table_class->new({
             name            => undef,
             result_class    => $class,
             source_name     => undef,
@@ -67,7 +68,7 @@ Adds columns to the current class and creates accessors for them.
 =head2 table
 
   __PACKAGE__->table('tbl_name');
-  
+
 Gets or sets the table name.
 
 =cut
@@ -76,7 +77,11 @@ sub table {
   my ($class, $table) = @_;
   return $class->result_source_instance->name unless $table;
   unless (ref $table) {
-    $table = $class->table_class->new({
+
+    my $table_class = $class->table_class;
+    $class->ensure_class_loaded($table_class);
+
+    $table = $table_class->new({
         $class->can('result_source_instance') ?
           %{$class->result_source_instance||{}} : (),
         name => $table,

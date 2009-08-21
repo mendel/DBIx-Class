@@ -5,13 +5,13 @@ use Test::More;
 use Test::Exception;
 use lib qw(t/lib);
 use DBICTest;
-use Data::Dumper;
+use IO::File;
 
 plan tests => 10;
 
 my $schema = DBICTest->init_schema();
+my $sdebug = $schema->storage->debug;
 
-use IO::File;
 
 # once the following TODO is complete, remove the 2 warning tests immediately
 # after the TODO block
@@ -44,19 +44,17 @@ TODO: {
     ok(! $o_mm_warn, 'no warning on attempt to prefetch several same level has_many\'s (1 -> M + M)');
 
     is($queries, 1, 'prefetch one->(has_many,has_many) ran exactly 1 query');
+    $schema->storage->debugcb (undef);
+    $schema->storage->debug ($sdebug);
+
     is($pr_tracks_count, $tracks_count, 'equal count of prefetched relations over several same level has_many\'s (1 -> M + M)');
-
-    for ($pr_tracks_rs, $tracks_rs) {
-        $_->result_class ('DBIx::Class::ResultClass::HashRefInflator');
-    }
-
-    is_deeply ([$pr_tracks_rs->all], [$tracks_rs->all], 'same structure returned with and without prefetch over several same level has_many\'s (1 -> M + M)');
+    is ($pr_tracks_rs->all, $tracks_rs->all, 'equal amount of objects returned with and without prefetch over several same level has_many\'s (1 -> M + M)');
 
     #( M -> 1 -> M + M )
     my $note_rs = $schema->resultset('LinerNotes')->search ({ notes => 'Buy Whiskey!' });
     my $pr_note_rs = $note_rs->search ({}, {
         prefetch => {
-            cd => [qw/tags tracks/]
+            cd => [qw/tracks tags/]
         },
     });
 
@@ -79,14 +77,11 @@ TODO: {
     ok(! $m_o_mm_warn, 'no warning on attempt to prefetch several same level has_many\'s (M -> 1 -> M + M)');
 
     is($queries, 1, 'prefetch one->(has_many,has_many) ran exactly 1 query');
+    $schema->storage->debugcb (undef);
+    $schema->storage->debug ($sdebug);
 
     is($pr_tags_count, $tags_count, 'equal count of prefetched relations over several same level has_many\'s (M -> 1 -> M + M)');
-
-    for ($pr_tags_rs, $tags_rs) {
-        $_->result_class ('DBIx::Class::ResultClass::HashRefInflator');
-    }
-
-    is_deeply ([$pr_tags_rs->all], [$tags_rs->all], 'same structure returned with and without prefetch over several same level has_many\'s (M -> 1 -> M + M)');
+    is($pr_tags_rs->all, $tags_rs->all, 'equal amount of objects with and without prefetch over several same level has_many\'s (M -> 1 -> M + M)');
 }
 
 # remove this closure once the TODO above is working
@@ -148,6 +143,7 @@ while (my @stuff = $c->next) {
 }
 
 $rs->reset;
+use Data::Dumper;
 diag Dumper [
   "\n$query",
   "\n$tb",

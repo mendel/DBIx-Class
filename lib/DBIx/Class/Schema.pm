@@ -7,9 +7,8 @@ use DBIx::Class::Exception;
 use Carp::Clan qw/^DBIx::Class/;
 use Scalar::Util qw/weaken/;
 use File::Spec;
-use MRO::Compat;
 use Sub::Name ();
-require Module::Find;
+use Module::Find();
 
 use base qw/DBIx::Class/;
 
@@ -43,7 +42,7 @@ DBIx::Class::Schema - composable schemas
     $dsn,
     $user,
     $password,
-    { AutoCommit => 0 },
+    { AutoCommit => 1 },
   );
 
   my $schema2 = Library::Schema->connect($coderef_returning_dbh);
@@ -512,7 +511,7 @@ syntax on the C<@connectinfo> argument, or L<DBIx::Class::Storage> in
 general.
 
 Note that C<connect_info> expects an arrayref of arguments, but
-C<connect> does not. C<connect> wraps it's arguments in an arrayref
+C<connect> does not. C<connect> wraps its arguments in an arrayref
 before passing them to C<connect_info>.
 
 =head3 Overloading
@@ -544,6 +543,8 @@ name.
 
 sub resultset {
   my ($self, $moniker) = @_;
+  $self->throw_exception('resultset() expects a source name')
+    unless defined $moniker;
   return $self->source($moniker)->resultset;
 }
 
@@ -756,7 +757,7 @@ i.e.,
     [ 2, 'Indie Band' ],
     ...
   ]);
-  
+
 Since wantarray context is basically the same as looping over $rs->create(...) 
 you won't see any performance benefits and in this case the method is more for
 convenience. Void context sends the column information directly to storage
@@ -807,10 +808,10 @@ Overload C<connection> to change the behaviour of C<connect>.
 sub connection {
   my ($self, @info) = @_;
   return $self if !@info && $self->storage;
-  
+
   my ($storage_class, $args) = ref $self->storage_type ? 
     ($self->_normalize_storage_type($self->storage_type),{}) : ($self->storage_type, {});
-    
+
   $storage_class = 'DBIx::Class::Storage'.$storage_class
     if $storage_class =~ m/^::/;
   eval "require ${storage_class};";
@@ -1125,6 +1126,19 @@ name format is: C<$dir$schema-$version-$type.sql>.
 You may override this method in your schema if you wish to use a different
 format.
 
+ WARNING
+
+ Prior to DBIx::Class version 0.08100 this method had a different signature:
+
+    my $filename = $table->ddl_filename($type, $dir, $version, $preversion)
+
+ In recent versions variables $dir and $version were reversed in order to
+ bring the signature in line with other Schema/Storage methods. If you 
+ really need to maintain backward compatibility, you can do the following
+ in any overriding methods:
+
+    ($dir, $version) = ($version, $dir) if ($DBIx::Class::VERSION < 0.08100);
+
 =cut
 
 sub ddl_filename {
@@ -1134,7 +1148,7 @@ sub ddl_filename {
   $filename =~ s/::/-/g;
   $filename = File::Spec->catfile($dir, "$filename-$version-$type.sql");
   $filename =~ s/$version/$preversion-$version/ if($preversion);
-  
+
   return $filename;
 }
 
@@ -1360,7 +1374,7 @@ more information.
     $self->throw_exception
       ("No arguments to load_classes and couldn't load ${base} ($@)")
         if $@;
-  
+
     if ($self eq $target) {
       # Pathological case, largely caused by the docs on early C::M::DBIC::Plain
       foreach my $moniker ($self->sources) {
@@ -1373,14 +1387,14 @@ more information.
       $self->connection(@info);
       return $self;
     }
-  
+
     my $schema = $self->compose_namespace($target, $base);
     {
       no strict 'refs';
       my $name = join '::', $target, 'schema';
       *$name = Sub::Name::subname $name, sub { $schema };
     }
-  
+
     $schema->connection(@info);
     foreach my $moniker ($schema->sources) {
       my $source = $schema->source($moniker);

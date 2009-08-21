@@ -17,7 +17,7 @@ else {
         plan skip_all => 'needs DateTime and DateTime::Format::Oracle for testing';
     }
     else {
-        plan tests => 7;
+        plan tests => 10;
     }
 }
 
@@ -42,7 +42,7 @@ my $dbh = $schema->storage->dbh;
 eval {
   $dbh->do("DROP TABLE track");
 };
-$dbh->do("CREATE TABLE track (trackid NUMBER(12), cd NUMBER(12), position NUMBER(12), title VARCHAR(255), last_updated_on DATE, last_updated_at TIMESTAMP)");
+$dbh->do("CREATE TABLE track (trackid NUMBER(12), cd NUMBER(12), position NUMBER(12), title VARCHAR(255), last_updated_on DATE, last_updated_at TIMESTAMP, small_dt DATE)");
 
 # insert a row to play with
 my $new = $schema->resultset('Track')->create({ trackid => 1, cd => 1, position => 1, title => 'Track1', last_updated_on => '06-MAY-07', last_updated_at => '2009-05-03 21:17:18.5' });
@@ -67,9 +67,36 @@ $track->update;
 is( $track->last_updated_on->month, $dt->month, "deflate ok");
 is( int $track->last_updated_at->nanosecond, int $dt->nanosecond, "deflate ok with nanosecond precision");
 
+# test datetime_setup
+
+$schema->storage->disconnect;
+
+delete $ENV{NLS_DATE_FORMAT};
+delete $ENV{NLS_TIMESTAMP_FORMAT};
+
+$schema->connection($dsn, $user, $pass, {
+    on_connect_call => 'datetime_setup'
+});
+
+$dt = DateTime->now();
+
+my $timestamp = $dt->clone;
+$timestamp->set_nanosecond( int 500_000_000 );
+
+$track = $schema->resultset('Track')->find( 1 );
+$track->update({ last_updated_on => $dt, last_updated_at => $timestamp });
+
+$track = $schema->resultset('Track')->find(1);
+
+is( $track->last_updated_on, $dt, 'DateTime round-trip as DATE' );
+is( $track->last_updated_at, $timestamp, 'DateTime round-trip as TIMESTAMP' );
+
+is( int $track->last_updated_at->nanosecond, int 500_000_000,
+  'TIMESTAMP nanoseconds survived' );
+
 # clean up our mess
 END {
-    if($dbh) {
+    if($schema && ($dbh = $schema->storage->dbh)) {
         $dbh->do("DROP TABLE track");
     }
 }

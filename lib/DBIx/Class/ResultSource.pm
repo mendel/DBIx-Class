@@ -1187,12 +1187,6 @@ sub _compare_relationship_keys {
   return $found;
 }
 
-sub resolve_join {
-  carp 'resolve_join is a private method, stop calling it';
-  my $self = shift;
-  $self->_resolve_join (@_);
-}
-
 # Returns the {from} structure used to express JOIN conditions
 sub _resolve_join {
   my ($self, $join, $alias, $seen, $jpath, $force_left) = @_;

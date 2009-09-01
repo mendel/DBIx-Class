@@ -14,7 +14,7 @@ test_requires 'Test::Builder'       => 0.33;
 test_requires 'Test::Deep'          => 0;
 test_requires 'Test::Exception'     => 0;
 test_requires 'Test::More'          => 0.92;
-test_requires 'Test::Warn'          => 0.11;
+test_requires 'Test::Warn'          => 0.21;
 
 test_requires 'File::Temp'          => 0.22;
 
@@ -29,7 +29,7 @@ requires 'Encode'                   => 0 if ($] <= 5.008000);
 
 # Dependencies (keep in alphabetical order)
 requires 'Carp::Clan'               => 6.0;
-requires 'Class::Accessor::Grouped' => 0.08003;
+requires 'Class::Accessor::Grouped' => 0.09000;
 requires 'Class::C3::Componentised' => 1.0005;
 requires 'Class::Inspector'         => 1.24;
 requires 'Data::Page'               => 2.00;

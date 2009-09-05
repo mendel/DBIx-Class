@@ -1312,65 +1312,10 @@ sub insert_bulk {
     goto $self->can('insert_bulk');
   }
 
-  my %colvalues;
-  my $table = $source->from;
-  @colvalues{@$cols} = (0..$#$cols);
-  my ($sql, @bind) = $self->sql_maker->insert($table, \%colvalues);
+  Carp::Clan::cluck ('This is where we are');
 
-  $self->_query_start( $sql, @bind );
-  my $sth = $self->sth($sql);
+  die 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
 
-#  @bind = map { ref $_ ? ''.$_ : $_ } @bind; # stringify args
-
-  ## This must be an arrayref, else nothing works!
-  my $tuple_status = [];
-
-  ## Get the bind_attributes, if any exist
-  my $bind_attributes = $self->source_bind_attributes($source);
-
-  ## Bind the values and execute
-  my $placeholder_index = 1;
-
-  foreach my $bound (@bind) {
-
-    my $attributes = {};
-    my ($column_name, $data_index) = @$bound;
-
-    if( $bind_attributes ) {
-      $attributes = $bind_attributes->{$column_name}
-      if defined $bind_attributes->{$column_name};
-    }
-
-    my @data = map { $_->[$data_index] } @$data;
-
-    $sth->bind_param_array( $placeholder_index, [@data], $attributes );
-    $placeholder_index++;
-  }
-  my $rv = eval { $sth->execute_array({ArrayTupleStatus => $tuple_status}) };
-  if (my $err = $@) {
-    my $i = 0;
-    ++$i while $i <= $#$tuple_status && !ref $tuple_status->[$i];
-
-    $self->throw_exception($sth->errstr || "Unexpected populate error: $err")
-      if ($i > $#$tuple_status);
-
-    require Data::Dumper;
-    local $Data::Dumper::Terse = 1;
-    local $Data::Dumper::Indent = 1;
-    local $Data::Dumper::Useqq = 1;
-    local $Data::Dumper::Quotekeys = 0;
-
-    $self->throw_exception(sprintf "%s for populate slice:\n%s",
-      $tuple_status->[$i][1],
-      Data::Dumper::Dumper(
-        { map { $cols->[$_] => $data->[$i][$_] } (0 .. $#$cols) }
-      ),
-    );
-  }
-  $self->throw_exception($sth->errstr) if !$rv;
-
-  $self->_query_end( $sql, @bind );
-  return (wantarray ? ($rv, $sth, @bind) : $rv);
 }
 
 sub update {

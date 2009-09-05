@@ -16,29 +16,9 @@ __PACKAGE__->sql_maker_class('DBIx::Class::SQLAHacks::MSSQL');
 
 sub insert_bulk {
   my $self = shift;
-  my ($source, $cols, $data) = @_;
-
-  my $identity_insert = 0;
-
-  COLUMNS:
-  foreach my $col (@{$cols}) {
-    if ($source->column_info($col)->{is_auto_increment}) {
-      $identity_insert = 1;
-      last COLUMNS;
-    }
-  }
-
-  if ($identity_insert) {
-    my $table = $source->from;
-    $self->_get_dbh->do("SET IDENTITY_INSERT $table ON");
-  }
 
   $self->next::method(@_);
 
-  if ($identity_insert) {
-    my $table = $source->from;
-    $self->_get_dbh->do("SET IDENTITY_INSERT $table OFF");
-  }
 }
 
 # support MSSQL GUID column types

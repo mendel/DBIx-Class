@@ -30,6 +30,7 @@ __PACKAGE__->add_columns(
   },
 );
 __PACKAGE__->set_primary_key('artistid');
+__PACKAGE__->add_unique_constraint(['artistid']); # do not remove, part of a test
 
 __PACKAGE__->mk_classdata('field_name_for', {
     artistid    => 'primary key',
@@ -82,5 +83,12 @@ sub sqlt_deploy_hook {
       or die $sqlt_table->error;
   }
 }
+
+sub store_column {
+  my ($self, $name, $value) = @_;
+  $value = 'X '.$value if ($name eq 'name' && $value && $value =~ /store_column test/);
+  $self->next::method($name, $value);
+}
+
 
 1;

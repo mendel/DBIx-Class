@@ -570,12 +570,16 @@ sub _unique_queries {
   my $where = $self->_collapse_cond($self->{attrs}{where} || {});
   my $num_where = scalar keys %$where;
 
-  my @unique_queries;
+  my (@unique_queries, %seen_column_combinations);
   foreach my $name (@constraint_names) {
-    my @unique_cols = $self->result_source->unique_constraint_columns($name);
-    my $unique_query = $self->_build_unique_query($query, \@unique_cols);
+    my @constraint_cols = $self->result_source->unique_constraint_columns($name);
 
-    my $num_cols = scalar @unique_cols;
+    my $constraint_sig = join "\x00", sort @constraint_cols;
+    next if $seen_column_combinations{$constraint_sig}++;
+
+    my $unique_query = $self->_build_unique_query($query, \@constraint_cols);
+
+    my $num_cols = scalar @constraint_cols;
     my $num_query = scalar keys %$unique_query;
 
     my $total = $num_query + $num_where;
@@ -1266,8 +1270,8 @@ sub _count_subq_rs {
   # extra selectors do not go in the subquery and there is no point of ordering it
   delete $sub_attrs->{$_} for qw/collapse select _prefetch_select as order_by/;
 
-  # if we prefetch, we group_by primary keys only as this is what we would get out of the rs via ->next/->all
-  # clobber old group_by regardless
+  # if we prefetch, we group_by primary keys only as this is what we would get out
+  # of the rs via ->next/->all. We DO WANT to clobber old group_by regardless
   if ( keys %{$attrs->{collapse}} ) {
     $sub_attrs->{group_by} = [ map { "$attrs->{alias}.$_" } ($rsrc->primary_columns) ]
   }
@@ -1509,7 +1513,8 @@ sub _rs_update_delete {
       if (my $g = $attrs->{group_by}) {
         my @current_group_by = map
           { $_ =~ /\./ ? $_ : "$attrs->{alias}.$_" }
-          (ref $g eq 'ARRAY' ? @$g : $g );
+          @$g
+        ;
 
         if (
           join ("\x00", sort @current_group_by)
@@ -2277,6 +2282,19 @@ C<belongs_to>resultset. Note Hashref.
     }
   });
 
+=over
+
+=item WARNING
+
+When subclassing ResultSet never attempt to override this method. Since
+it is a simple shortcut for C<< $self->new_result($attrs)->insert >>, a
+lot of the internals simply never call it, so your override will be
+bypassed more often than not. Override either L<new|DBIx::Class::Row/new>
+or L<insert|DBIx::Class::Row/insert> depending on how early in the
+L</create> process you need to intervene.
+
+=back
+
 =cut
 
 sub create {
@@ -2839,7 +2857,7 @@ sub _resolved_attrs {
 
   if ( $attrs->{join} || $attrs->{prefetch} ) {
 
-    $self->throw_exception ('join/prefetch can not be used with a literal scalarref {from}')
+    $self->throw_exception ('join/prefetch can not be used with a custom {from}')
       if ref $attrs->{from} ne 'ARRAY';
 
     my $join = delete $attrs->{join} || {};
@@ -2871,7 +2889,7 @@ sub _resolved_attrs {
     );
   }
 
-  if ($attrs->{group_by} and ! ref $attrs->{group_by}) {
+  if ($attrs->{group_by} and ref $attrs->{group_by} ne 'ARRAY') {
     $attrs->{group_by} = [ $attrs->{group_by} ];
   }
 
@@ -2984,6 +3002,13 @@ sub _rollout_hash {
 
 sub _calculate_score {
   my ($self, $a, $b) = @_;
+
+  if (defined $a xor defined $b) {
+    return 0;
+  }
+  elsif (not defined $a) {
+    return 1;
+  }
 
   if (ref $b eq 'HASH') {
     my ($b_key) = keys %{$b};

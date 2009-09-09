@@ -5,12 +5,11 @@ use Test::More;
 use lib qw(t/lib);
 use DBICTest;
 
-
 BEGIN {
-    eval "use SQL::Translator 0.09003;";
-    if ($@) {
-        plan skip_all => 'needs SQL::Translator 0.09003 for testing';
-    }
+  require DBIx::Class;
+  plan skip_all =>
+      'Test needs SQL::Translator ' . DBIx::Class->_sqlt_minimum_version
+    if not DBIx::Class->_sqlt_version_ok;
 }
 
 my $schema = DBICTest->init_schema();
@@ -23,13 +22,11 @@ my @sources = grep
   $schema->sources
 ;
 
-plan tests => ( @sources * 3);
-
 { 
 	my $sqlt_schema = create_schema({ schema => $schema, args => { parser_args => { } } });
 
 	foreach my $source (@sources) {
-		my $table = $sqlt_schema->get_table($schema->source($source)->from);
+		my $table = get_table($sqlt_schema, $schema, $source);
 
 		my $fk_count = scalar(grep { $_->type eq 'FOREIGN KEY' } $table->get_constraints);
 		my @indices = $table->get_indices;
@@ -43,7 +40,7 @@ plan tests => ( @sources * 3);
 	my $sqlt_schema = create_schema({ schema => $schema, args => { parser_args => { add_fk_index => 1 } } });
 
 	foreach my $source (@sources) {
-		my $table = $sqlt_schema->get_table($schema->source($source)->from);
+		my $table = get_table($sqlt_schema, $schema, $source);
 
 		my $fk_count = scalar(grep { $_->type eq 'FOREIGN KEY' } $table->get_constraints);
 		my @indices = $table->get_indices;
@@ -57,13 +54,15 @@ plan tests => ( @sources * 3);
 	my $sqlt_schema = create_schema({ schema => $schema, args => { parser_args => { add_fk_index => 0 } } });
 
 	foreach my $source (@sources) {
-		my $table = $sqlt_schema->get_table($schema->source($source)->from);
+		my $table = get_table($sqlt_schema, $schema, $source);
 
 		my @indices = $table->get_indices;
 		my $index_count = scalar(@indices);
 		is($index_count, 0, "correct number of indices for $source with add_fk_index => 0");
 	}
 }
+
+done_testing;
 
 sub create_schema {
 	my $args = shift;
@@ -82,4 +81,13 @@ sub create_schema {
 
 	$sqlt->parser('SQL::Translator::Parser::DBIx::Class');
 	return $sqlt->translate({ data => $schema }) or die $sqlt->error;
+}
+
+sub get_table {
+    my ($sqlt_schema, $schema, $source) = @_;
+
+    my $table_name = $schema->source($source)->from;
+    $table_name    = $$table_name if ref $table_name;
+
+    return $sqlt_schema->get_table($table_name);
 }

@@ -1,7 +1,8 @@
 use strict;
-use warnings;  
+use warnings;
 
 use Test::More;
+use Test::Warn;
 use lib qw(t/lib);
 use DBICTest;
 use Data::Dumper;
@@ -32,8 +33,6 @@ use Data::Dumper;
       return shift->next::method(@_);
     }
 }
-
-plan tests => 17;
 
 my $schema = DBICTest->init_schema( sqlite_use_file => 1 );
 
@@ -93,6 +92,7 @@ my $invocations = {
           'bar',
           undef,
           {
+            %{$storage->_default_dbi_connect_attributes || {} },
             PrintError => 0,
             AutoCommit => 1,
           },
@@ -122,8 +122,8 @@ my $invocations = {
       args => [
           {
             on_connect_do => [qw/a b c/],
-            PrintError => 0,
-            AutoCommit => 1,
+            PrintError => 1,
+            AutoCommit => 0,
             on_disconnect_do => [qw/d e f/],
             user => 'bar',
             dsn => 'foo',
@@ -138,10 +138,24 @@ my $invocations = {
           'bar',
           undef,
           {
-            PrintError => 0,
-            AutoCommit => 1,
+            %{$storage->_default_dbi_connect_attributes || {} },
+            PrintError => 1,
+            AutoCommit => 0,
           },
       ],
+  },
+  'connect_info ([ \%attr_with_coderef ])' => {
+      args => [ {
+        dbh_maker => $coderef,
+        dsn => 'blah',
+        user => 'bleh',
+        on_connect_do => [qw/a b c/],
+        on_disconnect_do => [qw/d e f/],
+      } ],
+      dbi_connect_info => [
+        $coderef
+      ],
+      warn => qr/Attribute\(s\) 'dsn', 'user' in connect_info were ignored/,
   },
 };
 
@@ -152,10 +166,13 @@ for my $type (keys %$invocations) {
   local $Data::Dumper::Sortkeys = 1;
   my $arg_dump = Dumper ($invocations->{$type}{args});
 
-  $storage->connect_info ($invocations->{$type}{args});
+  warnings_exist (
+    sub { $storage->connect_info ($invocations->{$type}{args}) },
+     $invocations->{$type}{warn} || (),
+    'Warned about ignored attributes',
+  );
 
   is ($arg_dump, Dumper ($invocations->{$type}{args}), "$type didn't modify passed arguments");
-
 
   is_deeply ($storage->_dbi_connect_info, $invocations->{$type}{dbi_connect_info}, "$type produced correct _dbi_connect_info");
   ok ( (not $storage->auto_savepoint and not $storage->unsafe), "$type correctly ignored extra hashref");
@@ -166,5 +183,7 @@ for my $type (keys %$invocations) {
     "$type correctly parsed DBIC specific on_[dis]connect_do",
   );
 }
+
+done_testing;
 
 1;

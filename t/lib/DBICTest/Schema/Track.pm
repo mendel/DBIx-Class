@@ -50,4 +50,16 @@ __PACKAGE__->belongs_to( disc => 'DBICTest::Schema::CD' => 'cd');
 __PACKAGE__->might_have( cd_single => 'DBICTest::Schema::CD', 'single_track' );
 __PACKAGE__->might_have( lyrics => 'DBICTest::Schema::Lyrics', 'track_id' );
 
+__PACKAGE__->might_have (
+    'next_track',
+    __PACKAGE__,
+    sub {
+        my ( $self_alias, $rel_alias, $self_rsrc, $rel_name ) = @_;
+        return {
+            "${self_alias}.cd" => \ "${rel_alias}.cd",
+            "${self_alias}.position" => { '<', \ "${rel_alias}.position" },
+        };
+    },
+);
+
 1;

@@ -818,6 +818,21 @@ sub resultset {
   );
 }
 
+sub clean_resultset {
+  my $self = shift;
+  $self->throw_exception(
+    'clean_resultset does not take any arguments. If you want another'.
+    'resultset, call it on the schema instead.'
+  ) if scalar @_;
+
+  return $self->resultset_class->new(
+    $self,
+    {
+      %{$self->schema->default_resultset_attributes}
+    },
+  );
+}
+
 =head2 source_name
 
 =over 4

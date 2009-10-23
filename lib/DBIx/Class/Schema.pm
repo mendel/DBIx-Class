@@ -548,6 +548,32 @@ sub resultset {
   return $self->source($moniker)->resultset;
 }
 
+=head2 clean_resultset
+
+=over 4
+
+=item Arguments: $source_name
+
+=item Return Value: $resultset
+
+=back
+
+  my $rs = $schema->clean_resultset('DVD');
+
+Returns the L<DBIx::Class::ResultSet> object for the registered source
+name. Unlike L</resultset>, it will not set the default attributes for
+that source name. It I<will> set the schema's default resultset
+attributes.
+
+=cut
+
+sub clean_resultset {
+  my ($self, $moniker) = @_;
+  $self->throw_exception('clean_resultset() expects a source name')
+    unless defined $moniker;
+  return $self->source($moniker)->clean_resultset;
+}
+
 =head2 sources
 
 =over 4

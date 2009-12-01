@@ -4,9 +4,9 @@ use strict;
 use warnings;
 
 use base qw/DBIx::Class/;
-use Carp::Clan qw/^DBIx::Class/;
+
+use DBIx::Class::Exception;
 use Scalar::Util ();
-use Scope::Guard;
 
 ###
 ### Internal method
@@ -155,7 +155,7 @@ sub new {
     $new->result_source($source);
   }
 
-  if (my $related = delete $attrs->{-from_resultset}) {
+  if (my $related = delete $attrs->{-cols_from_relations}) {
     @{$new->{_ignore_at_insert}={}}{@$related} = ();
   }
 
@@ -168,7 +168,8 @@ sub new {
     foreach my $key (keys %$attrs) {
       if (ref $attrs->{$key}) {
         ## Can we extract this lot to use with update(_or .. ) ?
-        confess "Can't do multi-create without result source" unless $source;
+        $new->throw_exception("Can't do multi-create without result source")
+          unless $source;
         my $info = $source->relationship_info($key);
         if ($info && $info->{attrs}{accessor}
           && $info->{attrs}{accessor} eq 'single')
@@ -423,7 +424,7 @@ L</delete> on one, sets it to false.
 sub in_storage {
   my ($self, $val) = @_;
   $self->{_in_storage} = $val if @_ > 1;
-  return $self->{_in_storage};
+  return $self->{_in_storage} ? 1 : 0;
 }
 
 =head2 update
@@ -750,10 +751,27 @@ See L<DBIx::Class::InflateColumn> for how to setup inflation.
 
 sub get_inflated_columns {
   my $self = shift;
-  return map {
-    my $accessor = $self->column_info($_)->{'accessor'} || $_;
-    ($_ => $self->$accessor);
-  } grep $self->has_column_loaded($_), $self->columns;
+
+  my %loaded_colinfo = (map
+    { $_ => $self->column_info($_) }
+    (grep { $self->has_column_loaded($_) } $self->columns)
+  );
+
+  my %inflated;
+  for my $col (keys %loaded_colinfo) {
+    if (exists $loaded_colinfo{$col}{accessor}) {
+      my $acc = $loaded_colinfo{$col}{accessor};
+      if (defined $acc) {
+        $inflated{$col} = $self->$acc;
+      }
+    }
+    else {
+      $inflated{$col} = $self->$col;
+    }
+  }
+
+  # return all loaded columns with the inflations overlayed on top
+  return ($self->get_columns, %inflated);
 }
 
 =head2 set_column
@@ -1330,10 +1348,12 @@ See L<DBIx::Class::Schema/throw_exception>.
 
 sub throw_exception {
   my $self=shift;
+
   if (ref $self && ref $self->result_source && $self->result_source->schema) {
-    $self->result_source->schema->throw_exception(@_);
-  } else {
-    croak(@_);
+    $self->result_source->schema->throw_exception(@_)
+  }
+  else {
+    DBIx::Class::Exception->throw(@_);
   }
 }
 

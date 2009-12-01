@@ -472,8 +472,12 @@ sub _on_connect
   my ($self, $args) = @_;
 
   $args = {} unless $args;
+
   $self->{vschema} = DBIx::Class::Version->connect(@{$self->storage->connect_info()});
   my $vtable = $self->{vschema}->resultset('Table');
+
+  # useful when connecting from scripts etc
+  return if ($args->{ignore_version} || ($ENV{DBIC_NO_VERSION_CHECK} && !exists $args->{ignore_version}));
 
   # check for legacy versions table and move to new if exists
   my $vschema_compat = DBIx::Class::VersionCompat->connect(@{$self->storage->connect_info()});
@@ -486,8 +490,6 @@ sub _on_connect
     }
   }
 
-  # useful when connecting from scripts etc
-  return if ($args->{ignore_version} || ($ENV{DBIC_NO_VERSION_CHECK} && !exists $args->{ignore_version}));
   my $pversion = $self->get_db_version();
 
   if($pversion eq $self->schema_version)
@@ -520,11 +522,11 @@ sub _create_db_to_schema_diff {
     return;
   }
 
-  $self->throw_exception($self->_sqlt_version_error)
-    if (not $self->_sqlt_version_ok);
+  $self->throw_exception($self->storage->_sqlt_version_error)
+    if (not $self->storage->_sqlt_version_ok);
 
-  my $db_tr = SQL::Translator->new({ 
-                                    add_drop_table => 1, 
+  my $db_tr = SQL::Translator->new({
+                                    add_drop_table => 1,
                                     parser => 'DBI',
                                     parser_args => { dbh => $self->storage->dbh }
                                    });

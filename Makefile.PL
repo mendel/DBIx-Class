@@ -42,9 +42,10 @@ requires 'MRO::Compat'              => '0.09';
 requires 'Module::Find'             => '0.06';
 requires 'Path::Class'              => '0.16';
 requires 'Scope::Guard'             => '0.03';
-requires 'SQL::Abstract'            => '1.58';
+requires 'SQL::Abstract'            => '1.60';
 requires 'SQL::Abstract::Limit'     => '0.13';
 requires 'Sub::Name'                => '0.04';
+requires 'Data::Dumper::Concise'    => '1.000';
 
 my %replication_requires = (
   'Moose',                    => '0.87',
@@ -54,14 +55,18 @@ my %replication_requires = (
   'Hash::Merge',              => '0.11',
 );
 
-# when changing also adjust $DBIx::Class::minimum_sqlt_version
-my $sqlt_recommends = '0.11002';
-
+#************************************************************************#
+# Make *ABSOLUTELY SURE* that nothing on this list is a real require,    #
+# since every module listed in %force_requires_if_author is deleted      #
+# from the final META.yml (thus will never make it as a CPAN dependency) #
+#************************************************************************#
 my %force_requires_if_author = (
   %replication_requires,
 
+  # when changing also adjust $DBIx::Class::Storage::DBI::minimum_sqlt_version
+  'SQL::Translator'           => '0.11002',
+
 #  'Module::Install::Pod::Inherit' => '0.01',
-  'SQL::Translator'           => $sqlt_recommends,
 
   # when changing also adjust version in t/02pod.t
   'Test::Pod'                 => '1.26',
@@ -105,12 +110,23 @@ my %force_requires_if_author = (
     ) : ()
   ,
 
-  $ENV{DBICTEST_ORACLE_DSN}
+  $ENV{DBICTEST_ORA_DSN}
     ? (
       'DateTime::Format::Oracle' => '0',
     ) : ()
   ,
+
+  $ENV{DBICTEST_SYBASE_DSN}
+    ? (
+      'DateTime::Format::Sybase' => 0,
+    ) : ()
+  ,
 );
+#************************************************************************#
+# Make ABSOLUTELY SURE that nothing on the list above is a real require, #
+# since every module listed in %force_requires_if_author is deleted      #
+# from the final META.yml (thus will never make it as a CPAN dependency) #
+#************************************************************************#
 
 
 install_script (qw|
@@ -123,15 +139,20 @@ tests_recursive (qw|
 
 resources 'IRC'         => 'irc://irc.perl.org/#dbix-class';
 resources 'license'     => 'http://dev.perl.org/licenses/';
-resources 'repository'  => 'http://dev.catalyst.perl.org/svnweb/bast/browse/DBIx-Class/';
+resources 'repository'  => 'http://dev.catalyst.perl.org/repos/bast/DBIx-Class/';
 resources 'MailingList' => 'http://lists.scsys.co.uk/cgi-bin/mailman/listinfo/dbix-class';
 
-no_index 'DBIx::Class::Storage::DBI::Sybase::Base';
 no_index 'DBIx::Class::SQLAHacks';
 no_index 'DBIx::Class::SQLAHacks::MSSQL';
+no_index 'DBIx::Class::SQLAHacks::OracleJoins';
 no_index 'DBIx::Class::Storage::DBI::AmbiguousGlob';
-no_index 'DBIx::Class::Storage::DBI::Sybase::Microsoft_SQL_Server';
-no_index 'DBIx::Class::Storage::DBI::Sybase::Microsoft_SQL_Server::NoBindVars';
+no_index 'DBIx::Class::Storage::DBIHacks';
+no_index 'DBIx::Class::PK::Auto::DB2';
+no_index 'DBIx::Class::PK::Auto::MSSQL';
+no_index 'DBIx::Class::PK::Auto::MySQL';
+no_index 'DBIx::Class::PK::Auto::Oracle';
+no_index 'DBIx::Class::PK::Auto::Pg';
+no_index 'DBIx::Class::PK::Auto::SQLite';
 
 # re-build README and require extra modules for testing if we're in a checkout
 

@@ -1092,6 +1092,7 @@ sub inflate_result {
 
       for my $me_pref (@$pre_val) {
 
+        # FIXME - this should not be necessary
         # the collapser currently *could* return bogus elements with all
         # columns set to undef
         my $has_def;

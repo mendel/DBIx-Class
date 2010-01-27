@@ -972,29 +972,18 @@ sub _construct_object {
 }
 
 # two arguments: $as_proto is an arrayref of column names,
-# $row_ref is an arrayref of the data. If none of the row data
-# is defined we return undef (that's copied from the old
-# _collapse_result). Next we decide whether we need to collapse
-# the resultset (i.e. we prefetch something) or not. $collapse
-# indicates that. The do-while loop will run once if we do not need
-# to collapse the result and will run as long as _merge_result returns
-# a true value. It will return undef if the current added row does not
-# match the previous row. A bit of stashing and cursor magic is
-# required so that the cursor is not mixed up.
-
-# "$rows" is a bit misleading. In the end, there should only be one
-# element in this arrayref. 
+# $row_ref is an arrayref of the data. Next we decide whether
+# we need to collapse the resultset (i.e. we prefetch something)
+# or not. $collapse indicates that. The do-while loop will run once
+# if we do not need to collapse the result and will run as long as
+# _merge_result returns a true value. It will return undef if the
+# current added row does not match the previous row. A bit of
+# stashing and cursor magic is required so that the cursor is not
+# mixed up. "$rows" is a bit misleading. In the end, there should
+# only be one element in this arrayref.
 
 sub _collapse_result {
     my ( $self, $as_proto, $row_ref ) = @_;
-    my $has_def;
-    for (@$row_ref) {
-        if ( defined $_ ) {
-            $has_def++;
-            last;
-        }
-    }
-    return undef unless $has_def;
 
     my $collapse = keys %{ $self->{_attrs}{collapse} || {} };
     my $rows     = [];

@@ -1,6 +1,6 @@
 -- 
 -- Created by SQL::Translator::Producer::SQLite
--- Created on Mon Sep 21 00:11:34 2009
+-- Created on Tue Jan 19 12:46:12 2010
 -- 
 
 
@@ -262,8 +262,6 @@ CREATE TABLE forceforeign (
   cd integer NOT NULL
 );
 
-CREATE INDEX forceforeign_idx_artist ON forceforeign (artist);
-
 --
 -- Table: self_ref_alias
 --
@@ -346,8 +344,6 @@ CREATE TABLE cd_artwork (
   cd_id INTEGER PRIMARY KEY NOT NULL
 );
 
-CREATE INDEX cd_artwork_idx_cd_id ON cd_artwork (cd_id);
-
 --
 -- Table: liner_notes
 --
@@ -355,8 +351,6 @@ CREATE TABLE liner_notes (
   liner_id INTEGER PRIMARY KEY NOT NULL,
   notes varchar(100) NOT NULL
 );
-
-CREATE INDEX liner_notes_idx_liner_id ON liner_notes (liner_id);
 
 --
 -- Table: lyric_versions
@@ -453,6 +447,6 @@ CREATE INDEX fourkeys_to_twokeys_idx_t_artist_t_cd ON fourkeys_to_twokeys (t_art
 -- View: year2000cds
 --
 CREATE VIEW year2000cds AS
-    SELECT cdid, artist, title FROM cd WHERE year ='2000';
+    SELECT cdid, artist, title, year, genreid, single_track FROM cd WHERE year = "2000";
 
 COMMIT;

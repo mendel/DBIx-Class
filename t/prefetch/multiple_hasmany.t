@@ -9,12 +9,8 @@ use DBICTest;
 my $schema = DBICTest->init_schema();
 my $sdebug = $schema->storage->debug;
 
-local $TODO =
-'Prefetch of multiple has_many rels at the same level (currently warn to protect the clueless git)';
-
 #( 1 -> M + M )
-my $cd_rs =
-  $schema->resultset('CD')->search( { 'me.title' => 'Forkful of bees' } );
+my $cd_rs = $schema->resultset('CD')->search( { 'me.title' => 'Forkful of bees' } );
 my $pr_cd_rs = $cd_rs->search( {}, { prefetch => [qw/tracks tags/], } );
 
 my $tracks_rs    = $cd_rs->first->tracks;

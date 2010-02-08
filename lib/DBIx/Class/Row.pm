@@ -171,9 +171,8 @@ sub new {
         $new->throw_exception("Can't do multi-create without result source")
           unless $source;
         my $info = $source->relationship_info($key);
-        if ($info && $info->{attrs}{accessor}
-          && $info->{attrs}{accessor} eq 'single')
-        {
+        my $acc_type = $info->{attrs}{accessor} || '';
+        if ($acc_type eq 'single') {
           my $rel_obj = delete $attrs->{$key};
           if(!Scalar::Util::blessed($rel_obj)) {
             $rel_obj = $new->__new_related_find_or_new_helper($key, $rel_obj);
@@ -188,9 +187,8 @@ sub new {
 
           $related->{$key} = $rel_obj;
           next;
-        } elsif ($info && $info->{attrs}{accessor}
-            && $info->{attrs}{accessor} eq 'multi'
-            && ref $attrs->{$key} eq 'ARRAY') {
+        }
+        elsif ($acc_type eq 'multi' && ref $attrs->{$key} eq 'ARRAY' ) {
           my $others = delete $attrs->{$key};
           my $total = @$others;
           my @objects;
@@ -210,9 +208,8 @@ sub new {
           }
           $related->{$key} = \@objects;
           next;
-        } elsif ($info && $info->{attrs}{accessor}
-          && $info->{attrs}{accessor} eq 'filter')
-        {
+        }
+        elsif ($acc_type eq 'filter') {
           ## 'filter' should disappear and get merged in with 'single' above!
           my $rel_obj = delete $attrs->{$key};
           if(!Scalar::Util::blessed($rel_obj)) {
@@ -763,9 +760,7 @@ sub get_inflated_columns {
   for my $col (keys %loaded_colinfo) {
     if (exists $loaded_colinfo{$col}{accessor}) {
       my $acc = $loaded_colinfo{$col}{accessor};
-      if (defined $acc) {
-        $inflated{$col} = $self->$acc;
-      }
+      $inflated{$col} = $self->$acc if defined $acc;
     }
     else {
       $inflated{$col} = $self->$col;
@@ -917,21 +912,18 @@ sub set_inflated_columns {
   foreach my $key (keys %$upd) {
     if (ref $upd->{$key}) {
       my $info = $self->relationship_info($key);
-      if ($info && $info->{attrs}{accessor}
-        && $info->{attrs}{accessor} eq 'single')
-      {
+      my $acc_type = $info->{attrs}{accessor} || '';
+      if ($acc_type eq 'single') {
         my $rel = delete $upd->{$key};
         $self->set_from_related($key => $rel);
         $self->{_relationship_data}{$key} = $rel;
-      } elsif ($info && $info->{attrs}{accessor}
-        && $info->{attrs}{accessor} eq 'multi') {
-          $self->throw_exception(
-            "Recursive update is not supported over relationships of type multi ($key)"
-          );
       }
-      elsif ($self->has_column($key)
-        && exists $self->column_info($key)->{_inflate_info})
-      {
+      elsif ($acc_type eq 'multi') {
+        $self->throw_exception(
+          "Recursive update is not supported over relationships of type '$acc_type' ($key)"
+        );
+      }
+      elsif ($self->has_column($key) && exists $self->column_info($key)->{_inflate_info}) {
         $self->set_inflated_column($key, delete $upd->{$key});
       }
     }

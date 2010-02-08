@@ -1256,7 +1256,11 @@ sub _resolve_join {
                   : $rel_info->{attrs}{join_type}
                 ,
                -join_path => [@$jpath, { $join => $as } ],
-               -is_single => (List::Util::first { $rel_info->{attrs}{accessor} eq $_ } (qw/single filter/) ),
+               -is_single => (
+                  $rel_info->{attrs}{accessor}
+                    &&
+                  List::Util::first { $rel_info->{attrs}{accessor} eq $_ } (qw/single filter/)
+                ),
                -alias => $as,
                -relation_chain_depth => $seen->{-relation_chain_depth} || 0,
              },
@@ -1415,8 +1419,7 @@ sub _resolve_prefetch {
     my $as_prefix = ($alias =~ /^.*?\.(.+)$/ ? $1.'.' : '');
     my $rel_source = $self->related_source($pre);
 
-    if (exists $rel_info->{attrs}{accessor}
-         && $rel_info->{attrs}{accessor} eq 'multi') {
+    if ($rel_info->{attrs}{accessor} && $rel_info->{attrs}{accessor} eq 'multi') {
       $self->throw_exception(
         "Can't prefetch has_many ${pre} (join cond too complex)")
         unless ref($rel_info->{cond}) eq 'HASH';
@@ -1431,7 +1434,8 @@ sub _resolve_prefetch {
                     keys %{$rel_info->{cond}};
       my @ord = (ref($rel_info->{attrs}{order_by}) eq 'ARRAY'
                    ? @{$rel_info->{attrs}{order_by}}
-                   : (defined $rel_info->{attrs}{order_by}
+   
+                : (defined $rel_info->{attrs}{order_by}
                        ? ($rel_info->{attrs}{order_by})
                        : ()));
       push(@$order, map { "${as}.$_" } (@key, @ord));

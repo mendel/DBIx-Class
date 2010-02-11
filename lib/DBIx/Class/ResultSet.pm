@@ -2773,9 +2773,26 @@ sub _resolved_attrs {
 
   $attrs->{columns} ||= delete $attrs->{cols} if exists $attrs->{cols};
   my @colbits;
+  my @del_colbits;
 
   # build columns (as long as select isn't set) into a set of as/select hashes
   unless ( $attrs->{select} ) {
+
+    my @del_cols = @{ delete $attrs->{'remove-columns'} || [] };
+
+    @del_colbits = map +{
+      (
+        /^\Q${alias}.\E(.+)$/
+          ? "$1"
+          : "$_"
+      )
+        =>
+      (
+        /\./
+          ? "$_"
+          : "${alias}.$_"
+      )
+    }, @del_cols;
 
     my @cols = ( ref($attrs->{columns}) eq 'ARRAY' )
       ? @{ delete $attrs->{columns}}
@@ -2840,6 +2857,23 @@ sub _resolved_attrs {
   # now add colbits to select/as
   push( @{ $attrs->{select} }, map { values( %{$_} ) } @colbits );
   push( @{ $attrs->{as} },     map { keys( %{$_} ) } @colbits );
+  use Devel::Dwarn;
+  if ( @del_colbits) {
+     push @{ $attrs->{'remove-select'} }, map values( %{$_} ), @del_colbits;
+     push @{ $attrs->{'remove-as'}     }, map keys( %{$_}   ), @del_colbits;
+  }
+
+  if (my $dels = delete $attrs->{'remove-select'}) {
+     for my $del (@{$dels}) {
+        $attrs->{select} = [grep !ref $_ && $_ ne $del, @{$attrs->{select}}];
+     }
+  }
+
+  if (my $dels = delete $attrs->{'remove-as'}) {
+     for my $del (@{$dels}) {
+        $attrs->{as} = [grep !ref $_ && $_ ne $del, @{$attrs->{as}}];
+     }
+  }
 
   my $adds;
   if ( $adds = delete $attrs->{'+select'} ) {

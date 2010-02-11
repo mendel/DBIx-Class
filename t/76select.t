@@ -64,33 +64,34 @@ is ($subsel->next->title, $cds->next->title, 'Second CD title match');
 
 is($schema->resultset('CD')->current_source_alias, "me", '$rs->current_source_alias returns "me"');
 
+REMOVECOLS: {
+   my $rs = $schema->resultset('CD')->search({},
+       {
+           'join' => 'artist',
+           'columns' => ['cdid', 'title', 'artist.name'],
+           'remove-columns' => ['title'],
+       }
+   );
 
-$rs = $schema->resultset('CD')->search({},
-    {
-        'join' => 'artist',
-        'columns' => ['cdid', 'title', 'artist.name'],
-        'remove-columns' => ['title'],
-    }
-);
+   is_same_sql_bind (
+     $rs->as_query,
+     '(SELECT me.cdid, artist.name FROM cd me  JOIN artist artist ON artist.artistid = me.artist)',
+     [],
+     'Use of remove-columns attribute results in proper sql'
+   );
 
-is_same_sql_bind (
-  $rs->as_query,
-  '(SELECT me.cdid, artist.name FROM cd me  JOIN artist artist ON artist.artistid = me.artist)',
-  [],
-  'Use of remove-columns attribute results in proper sql'
-);
+   lives_ok(sub {
+     $rs->first->get_column('cdid')
+   }, 'columns 1st rscolumn present');
 
-lives_ok(sub {
-  $rs->first->get_column('cdid')
-}, 'columns 1st rscolumn present');
+   dies_ok(sub {
+     $rs->first->get_column('title')
+   }, 'remove-columns rscolumn not present');
 
-dies_ok(sub {
-  $rs->first->get_column('title')
-}, 'remove-columns rscolumn not present');
-
-lives_ok(sub {
-  $rs->first->artist->get_column('name')
-}, 'columns 3rd rscolumn present');
+   lives_ok(sub {
+     $rs->first->artist->get_column('name')
+   }, 'columns 3rd rscolumn present');
+}
 
 $rs = $schema->resultset('CD')->search({},
     {
@@ -119,6 +120,35 @@ lives_ok(sub {
 }, 'columns 3rd rscolumn present');
 
 
+REMOVECOLSADDCOLS: {
+   my $rs = $schema->resultset('CD')->search({},
+       {
+           'join' => 'artist',
+           '+columns' => ['title'],
+           'columns' => ['cdid', 'title', 'artist.name'],
+           'remove-columns' => ['title','cdid'],
+       }
+   );
+
+   is_same_sql_bind (
+     $rs->as_query,
+     '(SELECT artist.name, me.title FROM cd me  JOIN artist artist ON artist.artistid = me.artist)',
+     [],
+     'Use of remove-columns and +columns attribute results in proper sql'
+   );
+
+   dies_ok(sub {
+     $rs->first->get_column('cdid')
+   }, 'remove-columns 2nd rscolumn not present');
+
+   lives_ok(sub {
+     $rs->first->get_column('title')
+   }, '+columns 1st rscolumn present');
+
+   lives_ok(sub {
+     $rs->first->artist->get_column('name')
+   }, 'columns 3rd rscolumn present');
+}
 
 $rs = $schema->resultset('CD')->search({},
     {

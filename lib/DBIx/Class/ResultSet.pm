@@ -2822,15 +2822,6 @@ sub _resolved_attrs {
     } @cols;
   }
 
-  # add the additional columns on
-  foreach ( 'include_columns', '+columns' ) {
-      push @colbits, map {
-          ( ref($_) eq 'HASH' )
-            ? $_
-            : { ( split( /\./, $_ ) )[-1] => ( /\./ ? $_ : "${alias}.$_" ) }
-      } ( ref($attrs->{$_}) eq 'ARRAY' ) ? @{ delete $attrs->{$_} } : delete $attrs->{$_} if ( $attrs->{$_} );
-  }
-
   # start with initial select items
   if ( $attrs->{select} ) {
     $attrs->{select} =
@@ -2857,7 +2848,7 @@ sub _resolved_attrs {
   # now add colbits to select/as
   push( @{ $attrs->{select} }, map { values( %{$_} ) } @colbits );
   push( @{ $attrs->{as} },     map { keys( %{$_} ) } @colbits );
-  use Devel::Dwarn;
+
   if ( @del_colbits) {
      push @{ $attrs->{'remove-select'} }, map values( %{$_} ), @del_colbits;
      push @{ $attrs->{'remove-as'}     }, map keys( %{$_}   ), @del_colbits;
@@ -2874,6 +2865,19 @@ sub _resolved_attrs {
         $attrs->{as} = [grep !ref $_ && $_ ne $del, @{$attrs->{as}}];
      }
   }
+
+  # add the additional columns on
+  @colbits = ();
+  foreach (qw{ include_columns +columns}) {
+      push @colbits, map {
+          ( ref($_) eq 'HASH' )
+            ? $_
+            : { ( split( /\./, $_ ) )[-1] => ( /\./ ? $_ : "${alias}.$_" ) }
+      } ( ref($attrs->{$_}) eq 'ARRAY' ) ? @{ delete $attrs->{$_} } : delete $attrs->{$_} if ( $attrs->{$_} );
+  }
+  push( @{ $attrs->{select} }, map { values( %{$_} ) } @colbits );
+  push( @{ $attrs->{as} },     map { keys( %{$_} ) } @colbits );
+
 
   my $adds;
   if ( $adds = delete $attrs->{'+select'} ) {

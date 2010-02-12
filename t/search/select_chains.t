@@ -37,6 +37,11 @@ my @chain = (
   {
     columns => [ 'year' ],
   } => 'SELECT me.year FROM cd me',
+
+  {
+    '+columns' => [ 'cdid' ],
+    'remove-columns' => [qw{cdid year}],
+  } => 'SELECT me.cdid FROM cd me',
 );
 
 my $rs = $schema->resultset('CD');

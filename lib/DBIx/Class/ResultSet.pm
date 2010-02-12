@@ -2778,9 +2778,26 @@ sub _resolved_attrs {
 
   $attrs->{columns} ||= delete $attrs->{cols} if exists $attrs->{cols};
   my @colbits;
+  my @del_colbits;
 
   # build columns (as long as select isn't set) into a set of as/select hashes
   unless ( $attrs->{select} ) {
+
+    my @del_cols = @{ delete $attrs->{'remove-columns'} || [] };
+
+    for (@del_cols) {
+      if ( ref $_ eq 'HASH' ) {
+        push @del_colbits, $_
+      } else {
+        my $key = /^\Q${alias}.\E(.+)$/
+          ? "$1"
+          : "$_";
+        my $value = /\./
+          ? "$_"
+          : "${alias}.$_";
+        push @del_colbits, { $key => $value };
+      }
+    }
 
     my @cols;
     if ( ref $attrs->{columns} eq 'ARRAY' ) {
@@ -2802,24 +2819,6 @@ sub _resolved_attrs {
           ? "$_"
           : "${alias}.$_";
         push @colbits, { $key => $value };
-      }
-    }
-  }
-
-  # add the additional columns on
-  foreach (qw{include_columns +columns}) {
-    if ( $attrs->{$_} ) {
-      my @list = ( ref($attrs->{$_}) eq 'ARRAY' )
-        ? @{ delete $attrs->{$_} }
-        : delete $attrs->{$_};
-      for (@list) {
-        if ( ref($_) eq 'HASH' ) {
-          push @colbits, $_
-        } else {
-          my $key = ( split /\./, $_ )[-1];
-          my $value = ( /\./ ? $_ : "$alias.$_" );
-          push @colbits, { $key => $value };
-        }
       }
     }
   }
@@ -2857,6 +2856,44 @@ sub _resolved_attrs {
   # now add colbits to select/as
   push @{ $attrs->{select} }, map values %{$_}, @colbits;
   push @{ $attrs->{as}     }, map keys   %{$_}, @colbits;
+
+  if ( @del_colbits) {
+     push @{ $attrs->{'remove-select'} }, map values( %{$_} ), @del_colbits;
+     push @{ $attrs->{'remove-as'}     }, map keys( %{$_}   ), @del_colbits;
+  }
+
+  if (my $dels = delete $attrs->{'remove-select'}) {
+     for my $del (@{$dels}) {
+        $attrs->{select} = [grep !ref $_ && $_ ne $del, @{$attrs->{select}}];
+     }
+  }
+
+  if (my $dels = delete $attrs->{'remove-as'}) {
+     for my $del (@{$dels}) {
+        $attrs->{as} = [grep !ref $_ && $_ ne $del, @{$attrs->{as}}];
+     }
+  }
+
+  # add the additional columns on
+  @colbits = ();
+  foreach (qw{include_columns +columns}) {
+    if ( $attrs->{$_} ) {
+      my @list = ( ref($attrs->{$_}) eq 'ARRAY' )
+        ? @{ delete $attrs->{$_} }
+        : delete $attrs->{$_};
+      for (@list) {
+        if ( ref($_) eq 'HASH' ) {
+          push @colbits, $_
+        } else {
+          my $key = ( split /\./, $_ )[-1];
+          my $value = ( /\./ ? $_ : "$alias.$_" );
+          push @colbits, { $key => $value };
+        }
+      }
+    }
+  }
+  push( @{ $attrs->{select} }, map { values( %{$_} ) } @colbits );
+  push( @{ $attrs->{as} },     map { keys( %{$_} ) } @colbits );
 
   if ( my $adds = delete $attrs->{'+select'} ) {
     $adds = [$adds] unless ref $adds eq 'ARRAY';

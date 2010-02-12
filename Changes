@@ -1,5 +1,6 @@
 Revision history for DBIx::Class
 
+        - Add remove-columns/remove-select/remove-as search attributes
         - Add as_subselect_rs to DBIC::ResultSet from
           DBIC::Helper::ResultSet::VirtualView::as_virtual_view
         - Depend on newest bugfixed Moose

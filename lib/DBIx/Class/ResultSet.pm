@@ -3258,6 +3258,27 @@ accessor in the related table.
 
 Deprecated.  Acts as a synonym for L</+columns> for backward compatibility.
 
+=head2 remove-columns
+
+=over 4
+
+=item Value: ArrayRef[ Str | HashRef[Str] ] \@columns
+
+=back
+
+Indicates columns to be removed from the currently selected columns from storage.
+For example:-
+
+  $schema->resultset('CD')->search(undef, {
+    '+columns' => [qw{artist.name artist.id}],
+    join => ['artist']
+  })->search(undef, {
+    'remove-columns' => [qw{artist.id}],
+  });
+
+would return all CDs and include a 'name' column to the information
+passed to object inflation.
+
 =head2 select
 
 =over 4

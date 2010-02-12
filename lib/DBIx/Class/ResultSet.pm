@@ -2773,26 +2773,9 @@ sub _resolved_attrs {
 
   $attrs->{columns} ||= delete $attrs->{cols} if exists $attrs->{cols};
   my @colbits;
-  my @del_colbits;
 
   # build columns (as long as select isn't set) into a set of as/select hashes
   unless ( $attrs->{select} ) {
-
-    my @del_cols = @{ delete $attrs->{'remove-columns'} || [] };
-
-    @del_colbits = map +{
-      (
-        /^\Q${alias}.\E(.+)$/
-          ? "$1"
-          : "$_"
-      )
-        =>
-      (
-        /\./
-          ? "$_"
-          : "${alias}.$_"
-      )
-    }, @del_cols;
 
     my @cols = ( ref($attrs->{columns}) eq 'ARRAY' )
       ? @{ delete $attrs->{columns}}
@@ -2822,6 +2805,15 @@ sub _resolved_attrs {
     } @cols;
   }
 
+  # add the additional columns on
+  foreach ( 'include_columns', '+columns' ) {
+      push @colbits, map {
+          ( ref($_) eq 'HASH' )
+            ? $_
+            : { ( split( /\./, $_ ) )[-1] => ( /\./ ? $_ : "${alias}.$_" ) }
+      } ( ref($attrs->{$_}) eq 'ARRAY' ) ? @{ delete $attrs->{$_} } : delete $attrs->{$_} if ( $attrs->{$_} );
+  }
+
   # start with initial select items
   if ( $attrs->{select} ) {
     $attrs->{select} =
@@ -2848,36 +2840,6 @@ sub _resolved_attrs {
   # now add colbits to select/as
   push( @{ $attrs->{select} }, map { values( %{$_} ) } @colbits );
   push( @{ $attrs->{as} },     map { keys( %{$_} ) } @colbits );
-
-  if ( @del_colbits) {
-     push @{ $attrs->{'remove-select'} }, map values( %{$_} ), @del_colbits;
-     push @{ $attrs->{'remove-as'}     }, map keys( %{$_}   ), @del_colbits;
-  }
-
-  if (my $dels = delete $attrs->{'remove-select'}) {
-     for my $del (@{$dels}) {
-        $attrs->{select} = [grep !ref $_ && $_ ne $del, @{$attrs->{select}}];
-     }
-  }
-
-  if (my $dels = delete $attrs->{'remove-as'}) {
-     for my $del (@{$dels}) {
-        $attrs->{as} = [grep !ref $_ && $_ ne $del, @{$attrs->{as}}];
-     }
-  }
-
-  # add the additional columns on
-  @colbits = ();
-  foreach (qw{ include_columns +columns}) {
-      push @colbits, map {
-          ( ref($_) eq 'HASH' )
-            ? $_
-            : { ( split( /\./, $_ ) )[-1] => ( /\./ ? $_ : "${alias}.$_" ) }
-      } ( ref($attrs->{$_}) eq 'ARRAY' ) ? @{ delete $attrs->{$_} } : delete $attrs->{$_} if ( $attrs->{$_} );
-  }
-  push( @{ $attrs->{select} }, map { values( %{$_} ) } @colbits );
-  push( @{ $attrs->{as} },     map { keys( %{$_} ) } @colbits );
-
 
   my $adds;
   if ( $adds = delete $attrs->{'+select'} ) {

@@ -2,7 +2,6 @@ package DBIx::Class::Storage::DBI::Replicated;
 
 BEGIN {
   use Carp::Clan qw/^DBIx::Class/;
-
   use DBIx::Class;
   croak('The following modules are required for Replication ' . DBIx::Class::Optional::Dependencies->req_missing_for ('replicated') )
     unless DBIx::Class::Optional::Dependencies->req_ok_for ('replicated');
@@ -304,6 +303,7 @@ has 'write_handler' => (
     reload_row
     with_deferred_fk_checks
     _prep_for_execute
+
     backup
     is_datatype_numeric
     _count_select

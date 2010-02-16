@@ -7,8 +7,7 @@ use DBICTest;
 
 my $schema = DBICTest->init_schema();
 
-#plan tests => 4;
-plan 'no_plan';
+plan tests => 9;
 
 my $artist = $schema->resultset ('Artist')->first;
 
@@ -79,7 +78,7 @@ is_deeply (
 
 
 # expect a year update on the only related row
-# (non-qunique column only)
+# (non-unique column only)
 $genre->update_or_create_related ('model_cd', {
   year => 2011,
 });
@@ -96,5 +95,3 @@ is_deeply (
   },
   'CD year column updated correctly without a disambiguator',
 );
-
-

@@ -1,10 +1,8 @@
 -- 
 -- Created by SQL::Translator::Producer::SQLite
--- Created on Sat Jun 27 14:02:39 2009
+-- Created on Sat Jan 30 19:18:55 2010
 -- 
-
-
-BEGIN TRANSACTION;
+;
 
 --
 -- Table: artist
@@ -15,6 +13,8 @@ CREATE TABLE artist (
   rank integer NOT NULL DEFAULT '13',
   charfield char(10)
 );
+
+CREATE INDEX artist_name_hookidx ON artist (name);
 
 --
 -- Table: bindtype_test
@@ -63,7 +63,8 @@ CREATE TABLE event (
   created_on timestamp NOT NULL,
   varchar_date varchar(20),
   varchar_datetime varchar(20),
-  skip_inflation datetime
+  skip_inflation datetime,
+  ts_without_tz datetime
 );
 
 --
@@ -104,6 +105,14 @@ CREATE TABLE link (
   id INTEGER PRIMARY KEY NOT NULL,
   url varchar(100),
   title varchar(100)
+);
+
+--
+-- Table: money_test
+--
+CREATE TABLE money_test (
+  id INTEGER PRIMARY KEY NOT NULL,
+  amount money
 );
 
 --
@@ -225,7 +234,7 @@ CREATE INDEX artist_undirected_map_idx_id2 ON artist_undirected_map (id2);
 --
 CREATE TABLE bookmark (
   id INTEGER PRIMARY KEY NOT NULL,
-  link integer NOT NULL
+  link integer
 );
 
 CREATE INDEX bookmark_idx_link ON bookmark (link);
@@ -251,8 +260,6 @@ CREATE TABLE forceforeign (
   cd integer NOT NULL
 );
 
-CREATE INDEX forceforeign_idx_artist ON forceforeign (artist);
-
 --
 -- Table: self_ref_alias
 --
@@ -272,10 +279,11 @@ CREATE INDEX self_ref_alias_idx_self_ref ON self_ref_alias (self_ref);
 CREATE TABLE track (
   trackid INTEGER PRIMARY KEY NOT NULL,
   cd integer NOT NULL,
-  position integer NOT NULL,
+  position int NOT NULL,
   title varchar(100) NOT NULL,
   last_updated_on datetime,
-  last_updated_at datetime
+  last_updated_at datetime,
+  small_dt smalldatetime
 );
 
 CREATE INDEX track_idx_cd ON track (cd);
@@ -334,8 +342,6 @@ CREATE TABLE cd_artwork (
   cd_id INTEGER PRIMARY KEY NOT NULL
 );
 
-CREATE INDEX cd_artwork_idx_cd_id ON cd_artwork (cd_id);
-
 --
 -- Table: liner_notes
 --
@@ -343,8 +349,6 @@ CREATE TABLE liner_notes (
   liner_id INTEGER PRIMARY KEY NOT NULL,
   notes varchar(100) NOT NULL
 );
-
-CREATE INDEX liner_notes_idx_liner_id ON liner_notes (liner_id);
 
 --
 -- Table: lyric_versions
@@ -441,6 +445,4 @@ CREATE INDEX fourkeys_to_twokeys_idx_t_artist_t_cd ON fourkeys_to_twokeys (t_art
 -- View: year2000cds
 --
 CREATE VIEW year2000cds AS
-    SELECT cdid, artist, title FROM cd WHERE year ='2000';
-
-COMMIT;
+    SELECT cdid, artist, title, year, genreid, single_track FROM cd WHERE year = "2000"

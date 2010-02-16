@@ -8,9 +8,9 @@ use DBICTest;
 use DBIC::SqlMakerTest;
 
 my $schema = DBICTest->init_schema();
+my $sdebug = $schema->storage->debug;
 
-#plan tests => 4;
-plan 'no_plan';
+plan tests => 6;
 
 my $artist = $schema->resultset ('Artist')->first;
 
@@ -74,9 +74,11 @@ $genre->update_or_create_related ('cds', {
 });
 
 $schema->storage->debugcb(undef);
+$schema->storage->debug ($sdebug);
 
+my ($search_sql) = $sql[0] =~ /^(SELECT .+?)\:/;
 is_same_sql (
-  $sql[0],
+  $search_sql,
   'SELECT me.cdid, me.artist, me.title, me.year, me.genreid, me.single_track
     FROM cd me 
     WHERE ( me.artist = ? AND me.title = ? AND me.genreid = ? )

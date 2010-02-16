@@ -6,7 +6,7 @@ use Test::Exception;
 use lib qw(t/lib);
 use DBICTest;
 
-plan tests => 93;
+plan tests => 91;
 
 my $schema = DBICTest->init_schema();
 
@@ -72,7 +72,7 @@ throws_ok (
       ],
     });
   },
-  qr/Recursive update is not supported over relationships of type multi/,
+  qr/Recursive update is not supported over relationships of type 'multi'/,
   'create via update of multi relationships throws an exception'
 );
 
@@ -329,80 +329,60 @@ lives_ok ( sub {
 }, 'Nested find_or_create');
 
 lives_ok ( sub {
-  my $artist2 = $schema->resultset('Artist')->create({
-    name => 'Fred 4',
-    cds => [
-      {
-        title => 'Music to code by',
-        year => 2007,
-      },
+  my $artist = $schema->resultset('Artist')->first;
+  
+  my $cd_result = $artist->create_related('cds', {
+  
+    title => 'TestOneCD1',
+    year => 2007,
+    tracks => [
+      { title => 'TrackOne' },
+      { title => 'TrackTwo' },
     ],
-    cds_unordered => [
-      {
-        title => 'Music to code by',
-        year => 2007,
-      },
-    ]
+
   });
-
-  is($artist2->in_storage, 1, 'artist with duplicate rels inserted okay');
-}, 'Multiple same level has_many create');
-
-lives_ok ( sub {
-	my $artist = $schema->resultset('Artist')->first;
-	
-	my $cd_result = $artist->create_related('cds', {
-	
-		title => 'TestOneCD1',
-		year => 2007,
-		tracks => [
-			{ title => 'TrackOne' },
-			{ title => 'TrackTwo' },
-		],
-
-	});
-	
-	isa_ok( $cd_result, 'DBICTest::CD', "Got Good CD Class");
-	ok( $cd_result->title eq "TestOneCD1", "Got Expected Title");
-	
-	my $tracks = $cd_result->tracks;
-	
-	isa_ok( $tracks, 'DBIx::Class::ResultSet', 'Got Expected Tracks ResultSet');
-	
-	foreach my $track ($tracks->all)
-	{
-		isa_ok( $track, 'DBICTest::Track', 'Got Expected Track Class');
-	}
+  
+  isa_ok( $cd_result, 'DBICTest::CD', "Got Good CD Class");
+  ok( $cd_result->title eq "TestOneCD1", "Got Expected Title");
+  
+  my $tracks = $cd_result->tracks;
+  
+  isa_ok( $tracks, 'DBIx::Class::ResultSet', 'Got Expected Tracks ResultSet');
+  
+  foreach my $track ($tracks->all)
+  {
+    isa_ok( $track, 'DBICTest::Track', 'Got Expected Track Class');
+  }
 }, 'First create_related pass');
 
 lives_ok ( sub {
-	my $artist = $schema->resultset('Artist')->first;
-	
-	my $cd_result = $artist->create_related('cds', {
-	
-		title => 'TestOneCD2',
-		year => 2007,
-		tracks => [
-			{ title => 'TrackOne' },
-			{ title => 'TrackTwo' },
-		],
+  my $artist = $schema->resultset('Artist')->first;
+  
+  my $cd_result = $artist->create_related('cds', {
+  
+    title => 'TestOneCD2',
+    year => 2007,
+    tracks => [
+      { title => 'TrackOne' },
+      { title => 'TrackTwo' },
+    ],
 
     liner_notes => { notes => 'I can haz liner notes?' },
 
-	});
-	
-	isa_ok( $cd_result, 'DBICTest::CD', "Got Good CD Class");
-	ok( $cd_result->title eq "TestOneCD2", "Got Expected Title");
+  });
+  
+  isa_ok( $cd_result, 'DBICTest::CD', "Got Good CD Class");
+  ok( $cd_result->title eq "TestOneCD2", "Got Expected Title");
   ok( $cd_result->notes eq 'I can haz liner notes?', 'Liner notes');
-	
-	my $tracks = $cd_result->tracks;
-	
-	isa_ok( $tracks, 'DBIx::Class::ResultSet', "Got Expected Tracks ResultSet");
-	
-	foreach my $track ($tracks->all)
-	{
-		isa_ok( $track, 'DBICTest::Track', 'Got Expected Track Class');
-	}
+  
+  my $tracks = $cd_result->tracks;
+  
+  isa_ok( $tracks, 'DBIx::Class::ResultSet', "Got Expected Tracks ResultSet");
+  
+  foreach my $track ($tracks->all)
+  {
+    isa_ok( $track, 'DBICTest::Track', 'Got Expected Track Class');
+  }
 }, 'second create_related with same arguments');
 
 lives_ok ( sub {
@@ -429,7 +409,7 @@ lives_ok ( sub {
 
   is($a->name, 'Kurt Cobain', 'Artist insertion ok');
   is($a->cds && $a->cds->first && $a->cds->first->title, 
-		  'In Utero', 'CD insertion ok');
+      'In Utero', 'CD insertion ok');
 }, 'populate');
 
 ## Create foreign key col obj including PK
@@ -451,7 +431,7 @@ lives_ok ( sub {
 }, 'Create foreign key col obj including PK');
 
 lives_ok ( sub {
-	$schema->resultset("CD")->create({ 
+  $schema->resultset("CD")->create({ 
               cdid => 28, 
               title => 'Boogie Wiggle', 
               year => '2007', 

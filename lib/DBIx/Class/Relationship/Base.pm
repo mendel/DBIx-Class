@@ -30,6 +30,8 @@ methods, for predefined ones, look in L<DBIx::Class::Relationship>.
 
   __PACKAGE__->add_relationship('relname', 'Foreign::Class', $cond, $attrs);
 
+=head3 condition
+
 The condition needs to be an L<SQL::Abstract>-style representation of the
 join between the tables. When resolving the condition for use in a C<JOIN>,
 keys using the pseudo-table C<foreign> are resolved to mean "the Table on the
@@ -67,9 +69,18 @@ Each key-value pair provided in a hashref will be used as C<AND>ed conditions.
 To add an C<OR>ed condition, use an arrayref of hashrefs. See the
 L<SQL::Abstract> documentation for more details.
 
-In addition to the
-L<standard ResultSet attributes|DBIx::Class::ResultSet/ATTRIBUTES>,
-the following attributes are also valid:
+=head3 attributes
+
+The L<standard ResultSet attributes|DBIx::Class::ResultSet/ATTRIBUTES> may
+be used as relationship attributes. In particular, the 'where' attribute is
+useful for filtering relationships:
+
+     __PACKAGE__->has_many( 'valid_users', 'MyApp::Schema::User',
+        { 'foreign.user_id' => 'self.user_id' },
+        { where => { valid => 1 } }
+    );
+
+The following attributes are also valid:
 
 =over 4
 
@@ -83,18 +94,18 @@ command immediately before C<JOIN>.
 
 An arrayref containing a list of accessors in the foreign class to create in
 the main class. If, for example, you do the following:
-  
+
   MyDB::Schema::CD->might_have(liner_notes => 'MyDB::Schema::LinerNotes',
     undef, {
       proxy => [ qw/notes/ ],
     });
-  
+
 Then, assuming MyDB::Schema::LinerNotes has an accessor named notes, you can do:
 
   my $cd = MyDB::Schema::CD->find(1);
   $cd->notes('Notes go here'); # set notes -- LinerNotes object is
                                # created if it doesn't exist
-  
+
 =item accessor
 
 Specifies the type of accessor that should be created for the relationship.
@@ -179,7 +190,7 @@ sub related_resultset {
   my $rel_info = $self->relationship_info($rel);
   $self->throw_exception( "No such relationship ${rel}" )
     unless $rel_info;
-  
+
   return $self->{related_resultsets}{$rel} ||= do {
     my $attrs = (@_ > 1 && ref $_[$#_] eq 'HASH' ? pop(@_) : {});
     $attrs = { %{$rel_info->{attrs} || {}}, %$attrs };
@@ -195,7 +206,7 @@ sub related_resultset {
     if ($cond eq $DBIx::Class::ResultSource::UNRESOLVABLE_CONDITION) {
       my $reverse = $source->reverse_relationship_info($rel);
       foreach my $rev_rel (keys %$reverse) {
-        if ($reverse->{$rev_rel}{attrs}{accessor} eq 'multi') {
+        if ($reverse->{$rev_rel}{attrs}{accessor} && $reverse->{$rev_rel}{attrs}{accessor} eq 'multi') {
           $attrs->{related_objects}{$rev_rel} = [ $self ];
           Scalar::Util::weaken($attrs->{related_object}{$rev_rel}[0]);
         } else {
@@ -249,7 +260,7 @@ sub search_related {
   ( $objects_rs ) = $rs->search_related_rs('relname', $cond, $attrs);
 
 This method works exactly the same as search_related, except that 
-it guarantees a restultset, even in list context.
+it guarantees a resultset, even in list context.
 
 =cut
 
@@ -381,7 +392,7 @@ example, to set the correct author for a book, find the Author object, then
 call set_from_related on the book.
 
 This is called internally when you pass existing objects as values to
-L<DBIx::Class::ResultSet/create>, or pass an object to a belongs_to acessor.
+L<DBIx::Class::ResultSet/create>, or pass an object to a belongs_to accessor.
 
 The columns are only set in the local copy of the object, call L</update> to
 set them in the storage.

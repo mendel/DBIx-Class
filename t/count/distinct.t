@@ -11,8 +11,6 @@ use DBIC::SqlMakerTest;
 
 my $schema = DBICTest->init_schema();
 
-plan tests => 58;
-
 # The tag Blue is assigned to cds 1 2 3 and 5
 # The tag Cheesy is assigned to cds 2 4 and 5
 #
@@ -80,23 +78,40 @@ for my $get_count (
   is($get_count->($rs), 3, 'Count by distinct function result as select literal');
 }
 
-eval {
-  my @warnings;
-  local $SIG{__WARN__} = sub { $_[0] =~ /The select => { distinct => ... } syntax will be deprecated/ 
-    ? push @warnings, @_
-    : warn @_
-  };
-  my $row = $schema->resultset('Tag')->search({}, { select => { distinct => 'tag' } })->first;
-  is (@warnings, 1, 'Warned about deprecated distinct') if $DBIx::Class::VERSION < 0.09;
-};
-ok ($@, 'Exception on deprecated distinct usage thrown') if $DBIx::Class::VERSION >= 0.09;
-
 throws_ok(
   sub { my $row = $schema->resultset('Tag')->search({}, { select => { distinct => [qw/tag cd/] } })->first },
   qr/select => { distinct => \.\.\. } syntax is not supported for multiple columns/,
   'throw on unsupported syntax'
 );
 
+# make sure distinct+func works
+{
+  my $rs = $schema->resultset('Artist')->search(
+    {},
+    {
+      join => 'cds',
+      distinct => 1,
+      '+select' => [ { count => 'cds.cdid', -as => 'amount_of_cds' } ],
+      '+as' => [qw/num_cds/],
+      order_by => { -desc => 'amount_of_cds' },
+    }
+  );
+
+  is_same_sql_bind (
+    $rs->as_query,
+    '(
+      SELECT me.artistid, me.name, me.rank, me.charfield, COUNT( cds.cdid ) AS amount_of_cds
+        FROM artist me LEFT JOIN cd cds ON cds.artist = me.artistid
+      GROUP BY me.artistid, me.name, me.rank, me.charfield
+      ORDER BY amount_of_cds DESC
+    )',
+    [],
+  );
+
+  is ($rs->next->get_column ('num_cds'), 3, 'Function aliased correctly');
+}
+
 # These two rely on the database to throw an exception. This might not be the case one day. Please revise.
 dies_ok(sub { my $count = $schema->resultset('Tag')->search({}, { '+select' => \'tagid AS tag_id', distinct => 1 })->count }, 'expecting to die');
-dies_ok(sub { my $count = $schema->resultset('Tag')->search({}, { select => { length => 'tag' }, distinct => 1 })->count }, 'expecting to die');
+
+done_testing;

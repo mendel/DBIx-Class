@@ -62,16 +62,6 @@ sub _check_author_makefile {
 ======================== FATAL ERROR ===========================
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-Reasons you received this message:
-
-EOE
-
-    foreach my $reason (@reasons) {
-      print STDERR "\t* $reason\n";
-    }
-
-    print STDERR <<'EOE';
-
 We have a number of reasons to believe that this is a development
 checkout and that you, the user, did not run `perl Makefile.PL`
 before using this code. You absolutely _must_ perform this step,

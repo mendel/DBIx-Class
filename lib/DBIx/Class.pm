@@ -378,7 +378,7 @@ wreis: Wallace Reis <wreis@cpan.org>
 
 zamolxes: Bogdan Lucaciu <bogdan@wiz.ro>
 
-milki: milki <milki@rescomp.berkeley.edu>
+milki: milki milk <milki@rescomp.berkeley.edu>
 
 =head1 COPYRIGHT
 

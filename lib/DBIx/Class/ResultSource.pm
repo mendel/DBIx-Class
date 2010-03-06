@@ -465,10 +465,11 @@ called after L</add_columns>.
 Additionally, defines a L<unique constraint|add_unique_constraint>
 named C<primary>.
 
-The primary key columns are used by L<DBIx::Class::PK::Auto> to
-retrieve automatically created values from the database. They are also
-used as default joining columns when specifying relationships, see
-L<DBIx::Class::Relationship>.
+Note: you normally do want to define a primary key on your sources
+B<even if the underlying database table does not have a primary key>.
+See
+L<DBIx::Class::Intro/The Significance and Importance of Primary Keys>
+for more info.
 
 =cut
 
@@ -501,6 +502,16 @@ L</set_primary_key>.
 
 sub primary_columns {
   return @{shift->_primaries||[]};
+}
+
+sub _pri_cols {
+  my $self = shift;
+  my @pcols = $self->primary_columns
+    or $self->throw_exception (sprintf(
+      'Operation requires a primary key to be declared on %s via set_primary_key',
+      ref $self,
+    ));
+  return @pcols;
 }
 
 =head2 add_unique_constraint
@@ -1565,7 +1576,7 @@ Creates a new ResultSource object.  Not normally called directly by end users.
   __PACKAGE__->column_info_from_storage(1);
 
 Enables the on-demand automatic loading of the above column
-metadata from storage as neccesary.  This is *deprecated*, and
+metadata from storage as necessary.  This is *deprecated*, and
 should not be used.  It will be removed before 1.0.
 
 

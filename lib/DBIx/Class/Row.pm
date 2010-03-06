@@ -440,7 +440,11 @@ Throws an exception if the row object is not yet in the database,
 according to L</in_storage>.
 
 This method issues an SQL UPDATE query to commit any changes to the
-object to the database if required.
+object to the database if required (see L</get_dirty_columns>).
+It throws an exception if a proper WHERE clause uniquely identifying
+the database row can not be constructed (see
+L<significance of primary keys|DBIx::Class::Manual::Intro/The Significance and Importance of Primary Keys>
+for more details).
 
 Also takes an optional hashref of C<< column_name => value> >> pairs
 to update on the object first. Be aware that the hashref will be
@@ -450,7 +454,7 @@ need to preserve the hashref, it is sufficient to pass a shallow copy
 to C<update>, e.g. ( { %{ $href } } )
 
 If the values passed or any of the column values set on the object
-contain scalar references, eg:
+contain scalar references, e.g.:
 
   $row->last_modified(\'NOW()');
   # OR
@@ -477,17 +481,18 @@ this method.
 sub update {
   my ($self, $upd) = @_;
   $self->throw_exception( "Not in database" ) unless $self->in_storage;
-  my $ident_cond = $self->ident_condition;
-  $self->throw_exception("Cannot safely update a row in a PK-less table")
+
+  my $ident_cond = $self->{_orig_ident} || $self->ident_condition;
+
+  $self->throw_exception('Unable to update a row with incomplete or no identity')
     if ! keys %$ident_cond;
 
   $self->set_inflated_columns($upd) if $upd;
   my %to_update = $self->get_dirty_columns;
   return $self unless keys %to_update;
   my $rows = $self->result_source->storage->update(
-               $self->result_source, \%to_update,
-               $self->{_orig_ident} || $ident_cond
-             );
+    $self->result_source, \%to_update, $ident_cond
+  );
   if ($rows == 0) {
     $self->throw_exception( "Can't update ${self}: row not found" );
   } elsif ($rows > 1) {
@@ -495,7 +500,7 @@ sub update {
   }
   $self->{_dirty_columns} = {};
   $self->{related_resultsets} = {};
-  undef $self->{_orig_ident};
+  delete $self->{_orig_ident};
   return $self;
 }
 
@@ -512,8 +517,10 @@ sub update {
 =back
 
 Throws an exception if the object is not in the database according to
-L</in_storage>. Runs an SQL DELETE statement using the primary key
-values to locate the row.
+L</in_storage>. Also throws an exception if a proper WHERE clause
+uniquely identifying the database row can not be constructed (see
+L<significance of primary keys|DBIx::Class::Manual::Intro/The Significance and Importance of Primary Keys>
+for more details).
 
 The object is still perfectly usable, but L</in_storage> will
 now return 0 and the object must be reinserted using L</insert>
@@ -544,17 +551,19 @@ sub delete {
   my $self = shift;
   if (ref $self) {
     $self->throw_exception( "Not in database" ) unless $self->in_storage;
+
     my $ident_cond = $self->{_orig_ident} || $self->ident_condition;
-    $self->throw_exception("Cannot safely delete a row in a PK-less table")
+    $self->throw_exception('Unable to delete a row with incomplete or no identity')
       if ! keys %$ident_cond;
-    foreach my $column (keys %$ident_cond) {
-            $self->throw_exception("Can't delete the object unless it has loaded the primary keys")
-              unless exists $self->{_column_data}{$column};
-    }
+
     $self->result_source->storage->delete(
-      $self->result_source, $ident_cond);
+      $self->result_source, $ident_cond
+    );
+
+    delete $self->{_orig_ident};
     $self->in_storage(undef);
-  } else {
+  }
+  else {
     $self->throw_exception("Can't do class delete without a ResultSource instance")
       unless $self->can('result_source_instance');
     my $attrs = @_ > 1 && ref $_[$#_] eq 'HASH' ? { %{pop(@_)} } : {};
@@ -812,9 +821,10 @@ instead, see L</set_inflated_columns>.
 sub set_column {
   my ($self, $column, $new_value) = @_;
 
-  $self->{_orig_ident} ||= $self->ident_condition;
-  my $old_value = $self->get_column($column);
+  # if we can't get an ident condition on first try - mark the object as unidentifiable
+  $self->{_orig_ident} ||= (eval { $self->ident_condition }) || {};
 
+  my $old_value = $self->get_column($column);
   $new_value = $self->store_column($column, $new_value);
 
   my $dirty;
@@ -898,7 +908,7 @@ Will even accept arrayrefs of data as a value to a
 L<DBIx::Class::Relationship/has_many> key, and create the related
 objects if necessary.
 
-Be aware that the input hashref might be edited in place, so dont rely
+Be aware that the input hashref might be edited in place, so don't rely
 on it being the same after a call to C<set_inflated_columns>. If you
 need to preserve the hashref, it is sufficient to pass a shallow copy
 to C<set_inflated_columns>, e.g. ( { %{ $href } } )
@@ -952,7 +962,7 @@ so that the database can insert its own autoincremented values into
 the new object.
 
 Relationships will be followed by the copy procedure B<only> if the
-relationship specifes a true value for its
+relationship specifies a true value for its
 L<cascade_copy|DBIx::Class::Relationship::Base> attribute. C<cascade_copy>
 is set by default on C<has_many> relationships and unset on all others.
 
@@ -975,7 +985,7 @@ sub copy {
   $new->insert;
 
   # Its possible we'll have 2 relations to the same Source. We need to make
-  # sure we don't try to insert the same row twice esle we'll violate unique
+  # sure we don't try to insert the same row twice else we'll violate unique
   # constraints
   my $rels_copied = {};
 
@@ -1272,8 +1282,11 @@ sub register_column {
 =back
 
 Fetches a fresh copy of the Row object from the database and returns it.
-
-If passed the \%attrs argument, will first apply these attributes to
+Throws an exception if a proper WHERE clause identifying the database row
+can not be constructed (i.e. if the original object does not contain its
+entire
+ L<primary key|DBIx::Class::Manual::Intro/The Significance and Importance of Primary Keys>
+). If passed the \%attrs argument, will first apply these attributes to
 the resultset used to find the row.
 
 This copy can then be used to compare to an existing row object, to
@@ -1297,13 +1310,22 @@ sub get_from_storage {
       $resultset = $resultset->search(undef, $attrs);
     }
 
-    return $resultset->find($self->{_orig_ident} || $self->ident_condition);
+    my $ident_cond = $self->{_orig_ident} || $self->ident_condition;
+
+    $self->throw_exception('Unable to requery a row with incomplete or no identity')
+      if ! keys %$ident_cond;
+
+    return $resultset->find($ident_cond);
 }
 
 =head2 discard_changes ($attrs)
 
 Re-selects the row from the database, losing any changes that had
-been made.
+been made. Throws an exception if a proper WHERE clause identifying
+the database row can not be constructed (i.e. if the original object
+does not contain its entire
+L<primary key|DBIx::Class::Manual::Intro/The Significance and Importance of Primary Keys>
+).
 
 This method can also be used to refresh from storage, retrieving any
 changes made since the row was last read from storage.

@@ -10,8 +10,12 @@ use File::Spec;
 use IO::Handle;
 
 BEGIN {
-    eval "use DBIx::Class::Storage::DBI::Replicated; use Test::Moose";
-    plan skip_all => "Deps not installed: $@" if $@;
+    eval { require Test::Moose; Test::Moose->import() };
+    plan skip_all => "Need Test::Moose to run this test" if $@;
+      require DBIx::Class;
+
+    plan skip_all => 'Test needs ' . DBIx::Class::Optional::Dependencies->req_missing_for ('replicated')
+      unless DBIx::Class::Optional::Dependencies->req_ok_for ('replicated');
 }
 
 use_ok 'DBIx::Class::Storage::DBI::Replicated::Pool';
@@ -264,6 +268,56 @@ for my $method (qw/by_connect_info by_storage_type/) {
   isa_ok $replicated->schema->storage->balancer
       => 'DBIx::Class::Storage::DBI::Replicated::Balancer::Random'
       => 'configured balancer_type';
+}
+
+### check that all Storage::DBI methods are handled by ::Replicated
+{
+  my @storage_dbi_methods = Class::MOP::Class
+    ->initialize('DBIx::Class::Storage::DBI')->get_all_method_names;
+
+  my @replicated_methods  = DBIx::Class::Storage::DBI::Replicated->meta
+    ->get_all_method_names;
+
+# remove constants and OTHER_CRAP
+  @storage_dbi_methods = grep !/^[A-Z_]+\z/, @storage_dbi_methods;
+
+# remove CAG accessors
+  @storage_dbi_methods = grep !/_accessor\z/, @storage_dbi_methods;
+
+# remove DBIx::Class (the root parent, with CAG and stuff) methods
+  my @root_methods = Class::MOP::Class->initialize('DBIx::Class')
+    ->get_all_method_names;
+  my %count;
+  $count{$_}++ for (@storage_dbi_methods, @root_methods);
+
+  @storage_dbi_methods = grep $count{$_} != 2, @storage_dbi_methods;
+
+# make hashes
+  my %storage_dbi_methods;
+  @storage_dbi_methods{@storage_dbi_methods} = ();
+  my %replicated_methods;
+  @replicated_methods{@replicated_methods} = ();
+
+# remove ::Replicated-specific methods
+  for my $method (@replicated_methods) {
+    delete $replicated_methods{$method}
+      unless exists $storage_dbi_methods{$method};
+  }
+  @replicated_methods = keys %replicated_methods;
+
+# check that what's left is implemented
+  %count = ();
+  $count{$_}++ for (@storage_dbi_methods, @replicated_methods);
+
+  if ((grep $count{$_} == 2, @storage_dbi_methods) == @storage_dbi_methods) {
+    pass 'all DBIx::Class::Storage::DBI methods implemented';
+  }
+  else {
+    my @unimplemented = grep $count{$_} == 1, @storage_dbi_methods;
+
+    fail 'the following DBIx::Class::Storage::DBI methods are unimplemented: '
+      . "@unimplemented";
+  }
 }
 
 ### check that all Storage::DBI methods are handled by ::Replicated
@@ -851,53 +905,4 @@ is $debug{storage_type}, 'REPLICANT', "got last query from a replicant: $debug{d
         return $replicated->schema->storage->execute_reliably(sub {
             return $replicated->schema->txn_do(sub {
                 return $replicated->schema->storage->execute_reliably(sub {
-                    ok my $more = $replicated->schema->resultset('Artist')->find(1)
-                      => 'found inside crazy deep transactions and execute_reliably';
-                    is $debug{storage_type}, 'MASTER', "got last query from a master: $debug{dsn}";
-                    return $more;
-                });
-            });
-        });
-    }) => 'successfully processed transaction';
-
-    is $result->id, 1
-       => 'Got expected single result from transaction';
-}
-
-## Test the force_pool resultset attribute.
-
-{
-    ok my $artist_rs = $replicated->schema->resultset('Artist')
-        => 'got artist resultset';
-
-    ## Turn on Forced Pool Storage
-    ok my $reliable_artist_rs = $artist_rs->search(undef, {force_pool=>'master'})
-        => 'Created a resultset using force_pool storage';
-
-    ok my $artist = $reliable_artist_rs->find(2)
-        => 'got an artist result via force_pool storage';
-
-    is $debug{storage_type}, 'MASTER', "got last query from a master: $debug{dsn}";
-}
-
-## Test the force_pool resultset attribute part two.
-
-{
-    ok my $artist_rs = $replicated->schema->resultset('Artist')
-        => 'got artist resultset';
-
-    ## Turn on Forced Pool Storage
-    ok my $reliable_artist_rs = $artist_rs->search(undef, {force_pool=>$replicant_names[0]})
-        => 'Created a resultset using force_pool storage';
-
-    ok my $artist = $reliable_artist_rs->find(2)
-        => 'got an artist result via force_pool storage';
-
-    is $debug{storage_type}, 'REPLICANT', "got last query from a replicant: $debug{dsn}";
-}
-## Delete the old database files
-$replicated->cleanup;
-
-done_testing;
-
-# vim: sw=4 sts=4 :
+     

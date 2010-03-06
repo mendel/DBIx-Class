@@ -16,11 +16,6 @@ use List::Util();
 use Data::Dumper::Concise();
 use Sub::Name ();
 
-# what version of sqlt do we require if deploy() without a ddl_dir is invoked
-# when changing also adjust the corresponding author_require in Makefile.PL
-my $minimum_sqlt_version = '0.11002';
-
-
 __PACKAGE__->mk_group_accessors('simple' =>
   qw/_connect_info _dbi_connect_info _dbh _sql_maker _sql_maker_opts _conn_pid
      _conn_tid transaction_depth _dbh_autocommit _driver_determined savepoints/
@@ -45,6 +40,7 @@ __PACKAGE__->sql_maker_class('DBIx::Class::SQLAHacks');
 # Each of these methods need _determine_driver called before itself
 # in order to function reliably. This is a purely DRY optimization
 my @rdbms_specific_methods = qw/
+  deployment_statements
   sqlt_type
   build_datetime_parser
   datetime_parser_type
@@ -195,7 +191,7 @@ for most DBDs. See L</DBIx::Class and AutoCommit> for details.
 In addition to the standard L<DBI|DBI/ATTRIBUTES_COMMON_TO_ALL_HANDLES>
 L<connection|DBI/Database_Handle_Attributes> attributes, DBIx::Class recognizes
 the following connection options. These options can be mixed in with your other
-L<DBI> connection attributes, or placed in a seperate hashref
+L<DBI> connection attributes, or placed in a separate hashref
 (C<\%extra_attributes>) as shown above.
 
 Every time C<connect_info> is invoked, any previous settings for
@@ -347,7 +343,7 @@ SQL Server you should use C<< quote_char => [qw/[ ]/] >>.
 =item name_sep
 
 This only needs to be used in conjunction with C<quote_char>, and is used to
-specify the charecter that seperates elements (schemas, tables, columns) from
+specify the character that separates elements (schemas, tables, columns) from
 each other. In most cases this is simply a C<.>.
 
 The consequences of not supplying this value is that L<SQL::Abstract>
@@ -783,8 +779,8 @@ sub with_deferred_fk_checks {
 
 =back
 
-Verifies that the the current database handle is active and ready to execute
-an SQL statement (i.e. the connection did not get stale, server is still
+Verifies that the current database handle is active and ready to execute
+an SQL statement (e.g. the connection did not get stale, server is still
 answering, etc.) This method is used internally by L</dbh>.
 
 =cut
@@ -953,15 +949,19 @@ sub _determine_driver {
         else {
           # try to use dsn to not require being connected, the driver may still
           # force a connection in _rebless to determine version
-          ($driver) = $self->_dbi_connect_info->[0] =~ /dbi:([^:]+):/i;
+          # (dsn may not be supplied at all if all we do is make a mock-schema)
+          my $dsn = $self->_dbi_connect_info->[0] || '';
+          ($driver) = $dsn =~ /dbi:([^:]+):/i;
         }
       }
 
-      my $storage_class = "DBIx::Class::Storage::DBI::${driver}";
-      if ($self->load_optional_class($storage_class)) {
-        mro::set_mro($storage_class, 'c3');
-        bless $self, $storage_class;
-        $self->_rebless();
+      if ($driver) {
+        my $storage_class = "DBIx::Class::Storage::DBI::${driver}";
+        if ($self->load_optional_class($storage_class)) {
+          mro::set_mro($storage_class, 'c3');
+          bless $self, $storage_class;
+          $self->_rebless();
+        }
       }
     }
 
@@ -1606,15 +1606,7 @@ sub _subq_update_delete {
   my $rsrc = $rs->result_source;
 
   # quick check if we got a sane rs on our hands
-  my @pcols = $rsrc->primary_columns;
-  unless (@pcols) {
-    $self->throw_exception (
-      sprintf (
-        "You must declare primary key(s) on source '%s' (via set_primary_key) in order to update or delete complex resultsets",
-        $rsrc->source_name || $rsrc->from
-      )
-    );
-  }
+  my @pcols = $rsrc->_pri_cols;
 
   my $sel = $rs->_resolved_attrs->{select};
   $sel = [ $sel ] unless ref $sel eq 'ARRAY';
@@ -1667,7 +1659,7 @@ sub _per_row_update_delete {
   my ($rs, $op, $values) = @_;
 
   my $rsrc = $rs->result_source;
-  my @pcols = $rsrc->primary_columns;
+  my @pcols = $rsrc->_pri_cols;
 
   my $guard = $self->txn_scope_guard;
 
@@ -1901,7 +1893,33 @@ sub _count_select {
 #
 sub _subq_count_select {
   my ($self, $source, $rs_attrs) = @_;
-  return $rs_attrs->{group_by} if $rs_attrs->{group_by};
+
+  if (my $groupby = $rs_attrs->{group_by}) {
+
+    my $avail_columns = $self->_resolve_column_info ($rs_attrs->{from});
+
+    my $sel_index;
+    for my $sel (@{$rs_attrs->{select}}) {
+      if (ref $sel eq 'HASH' and $sel->{-as}) {
+        $sel_index->{$sel->{-as}} = $sel;
+      }
+    }
+
+    my @selection;
+    for my $g_part (@$groupby) {
+      if (ref $g_part or $avail_columns->{$g_part}) {
+        push @selection, $g_part;
+      }
+      elsif ($sel_index->{$g_part}) {
+        push @selection, $sel_index->{$g_part};
+      }
+      else {
+        $self->throw_exception ("group_by criteria '$g_part' not contained within current resultset source(s)");
+      }
+    }
+
+    return \@selection;
+  }
 
   my @pcols = map { join '.', $rs_attrs->{alias}, $_ } ($source->primary_columns);
   return @pcols ? \@pcols : [ 1 ];
@@ -2251,8 +2269,9 @@ sub create_ddl_dir {
     %{$sqltargs || {}}
   };
 
-  $self->throw_exception("Can't create a ddl file without SQL::Translator: " . $self->_sqlt_version_error)
-    if !$self->_sqlt_version_ok;
+  unless (DBIx::Class::Optional::Dependencies->req_ok_for ('deploy')) {
+    $self->throw_exception("Can't create a ddl file without " . DBIx::Class::Optional::Dependencies->req_missing_for ('deploy') );
+  }
 
   my $sqlt = SQL::Translator->new( $sqltargs );
 
@@ -2394,8 +2413,9 @@ sub deployment_statements {
       return join('', @rows);
   }
 
-  $self->throw_exception("Can't deploy without either SQL::Translator or a ddl_dir: " . $self->_sqlt_version_error )
-    if !$self->_sqlt_version_ok;
+  unless (DBIx::Class::Optional::Dependencies->req_ok_for ('deploy') ) {
+    $self->throw_exception("Can't deploy without a ddl_dir or " . DBIx::Class::Optional::Dependencies->req_missing_for ('deploy') );
+  }
 
   # sources needs to be a parser arg, but for simplicty allow at top level
   # coming in
@@ -2445,7 +2465,7 @@ sub deploy {
     }
     $self->_query_end($line);
   };
-  my @statements = $self->deployment_statements($schema, $type, undef, $dir, { %{ $sqltargs || {} }, no_comments => 1 } );
+  my @statements = $schema->deployment_statements($type, undef, $dir, { %{ $sqltargs || {} }, no_comments => 1 } );
   if (@statements > 1) {
     foreach my $statement (@statements) {
       $deploy->( $statement );
@@ -2519,33 +2539,6 @@ sub lag_behind_master {
     return;
 }
 
-# SQLT version handling
-{
-  my $_sqlt_version_ok;     # private
-  my $_sqlt_version_error;  # private
-
-  sub _sqlt_version_ok {
-    if (!defined $_sqlt_version_ok) {
-      eval "use SQL::Translator $minimum_sqlt_version";
-      if ($@) {
-        $_sqlt_version_ok = 0;
-        $_sqlt_version_error = $@;
-      }
-      else {
-        $_sqlt_version_ok = 1;
-      }
-    }
-    return $_sqlt_version_ok;
-  }
-
-  sub _sqlt_version_error {
-    shift->_sqlt_version_ok unless defined $_sqlt_version_ok;
-    return $_sqlt_version_error;
-  }
-
-  sub _sqlt_minimum_version { $minimum_sqlt_version };
-}
-
 =head2 relname_to_table_alias
 
 =over 4
@@ -2560,8 +2553,8 @@ queries.
 This hook is to allow specific L<DBIx::Class::Storage> drivers to change the
 way these aliases are named.
 
-The default behavior is C<"$relname_$join_count" if $join_count > 1>, otherwise
-C<"$relname">.
+The default behavior is C<< "$relname_$join_count" if $join_count > 1 >>,
+otherwise C<"$relname">.
 
 =cut
 

@@ -106,9 +106,14 @@ Another common use for joining to related tables, is to fetch the data
 from both tables in one query, preventing extra round-trips to the
 database. See the example above in L</WHAT ARE JOINS>.
 
+Three techniques are described here. Of the three, only the
+C<prefetch> technique will deal sanely with fetching related objects
+over a C<has_many> relation. The others work fine for 1 to 1 type
+relationships.
+
 =head2 Whole related objects
 
-To fetch entire related objects, eg CDs and all Track data, use the
+To fetch entire related objects, e.g. CDs and all Track data, use the
 'prefetch' attribute:
 
   $schema->resultset('CD')->search(
@@ -124,7 +129,7 @@ This will produce SQL similar to the following:
   SELECT cd.ID, cd.Title, cd.Year, tracks.id, tracks.Name, tracks.Artist FROM CD JOIN Tracks ON CD.ID = tracks.CDID WHERE cd.Title = 'Funky CD' ORDER BY 'tracks.id';
 
 The syntax of 'prefetch' is the same as 'join' and implies the
-joining, so no need to use both together.
+joining, so there is no need to use both together.
 
 =head2 Subset of related fields
 
@@ -227,7 +232,7 @@ Which is:
 
 To perform joins using relations of the tables you are joining to, use
 a hashref to indicate the join depth. This can theoretically go as
-deep as you like (warning, contrived examples!): 
+deep as you like (warning: contrived examples!): 
 
   join => { room => { table => 'leg' } }
 

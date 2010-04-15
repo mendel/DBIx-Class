@@ -18,10 +18,6 @@ my ($dsn, $user, $pass) = @ENV{map { "DBICTEST_MSSQL_${_}" } qw/DSN USER PASS/};
 plan skip_all => 'Set $ENV{DBICTEST_MSSQL_DSN}, _USER and _PASS to run this test'
   unless ($dsn);
 
-my $TESTS = 18;
-
-plan tests => $TESTS * 2;
-
 my @storage_types = (
   'DBI::Sybase::Microsoft_SQL_Server',
   'DBI::Sybase::Microsoft_SQL_Server::NoBindVars',
@@ -29,34 +25,41 @@ my @storage_types = (
 my $storage_idx = -1;
 my $schema;
 
+my $NUMBER_OF_TESTS_IN_BLOCK = 18;
 for my $storage_type (@storage_types) {
   $storage_idx++;
 
   $schema = DBICTest::Schema->clone;
 
-  if ($storage_idx != 0) { # autodetect
-    $schema->storage_type("::$storage_type");
-  }
-
   $schema->connection($dsn, $user, $pass);
 
-  $schema->storage->ensure_connected;
+  if ($storage_idx != 0) { # autodetect
+    no warnings 'redefine';
+    local *DBIx::Class::Storage::DBI::_typeless_placeholders_supported =
+      sub { 0 };
+#    $schema->storage_type("::$storage_type");
+    $schema->storage->ensure_connected;
+  }
+  else {
+    $schema->storage->ensure_connected;
+  }
 
   if ($storage_idx == 0 && ref($schema->storage) =~ /NoBindVars\z/) {
     my $tb = Test::More->builder;
-    $tb->skip('no placeholders') for 1..$TESTS;
+    $tb->skip('no placeholders') for 1..$NUMBER_OF_TESTS_IN_BLOCK;
     next;
   }
 
   isa_ok($schema->storage, "DBIx::Class::Storage::$storage_type");
 
-# start disconnected to test reconnection
+# start disconnected to test _ping
   $schema->storage->_dbh->disconnect;
 
-  my $dbh;
-  lives_ok (sub {
-    $dbh = $schema->storage->dbh;
-  }, 'reconnect works');
+  lives_ok {
+    $schema->storage->dbh_do(sub { $_[1]->do('select 1') })
+  } '_ping works';
+
+  my $dbh = $schema->storage->dbh;
 
   $dbh->do("IF OBJECT_ID('artist', 'U') IS NOT NULL
       DROP TABLE artist");
@@ -170,6 +173,18 @@ SQL
   is $rs->first, undef, 'rolled back';
   $rs->reset;
 }
+
+# test op-induced autoconnect
+lives_ok (sub {
+
+  my $schema =  DBICTest::Schema->clone;
+  $schema->connection($dsn, $user, $pass);
+
+  my $artist = $schema->resultset ('Artist')->search ({}, { order_by => 'artistid' })->next;
+  is ($artist->id, 1, 'Artist retrieved successfully');
+}, 'Query-induced autoconnect works');
+
+done_testing;
 
 # clean up our mess
 END {

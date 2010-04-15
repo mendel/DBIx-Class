@@ -9,6 +9,7 @@ use base qw/SQL::Abstract::Limit/;
 use strict;
 use warnings;
 use Carp::Clan qw/^DBIx::Class|^SQL::Abstract/;
+use Sub::Name();
 
 BEGIN {
   # reinstall the carp()/croak() functions imported into SQL::Abstract
@@ -18,17 +19,15 @@ BEGIN {
   for my $f (qw/carp croak/) {
 
     my $orig = \&{"SQL::Abstract::$f"};
-    *{"SQL::Abstract::$f"} = sub {
-
-      local $Carp::CarpLevel = 1;   # even though Carp::Clan ignores this, $orig will not
-
-      if (Carp::longmess() =~ /DBIx::Class::SQLAHacks::[\w]+ .+? called \s at/x) {
-        __PACKAGE__->can($f)->(@_);
-      }
-      else {
-        $orig->(@_);
-      }
-    }
+    *{"SQL::Abstract::$f"} = Sub::Name::subname "SQL::Abstract::$f" =>
+      sub {
+        if (Carp::longmess() =~ /DBIx::Class::SQLAHacks::[\w]+ .+? called \s at/x) {
+          __PACKAGE__->can($f)->(@_);
+        }
+        else {
+          goto $orig;
+        }
+      };
   }
 }
 
@@ -48,31 +47,80 @@ sub new {
 }
 
 
-# Slow but ANSI standard Limit/Offset support. DB2 uses this
+# ANSI standard Limit/Offset implementation. DB2 and MSSQL use this
 sub _RowNumberOver {
   my ($self, $sql, $order, $rows, $offset ) = @_;
 
-  $offset += 1;
-  my $last = $rows + $offset - 1;
-  my ( $order_by ) = $self->_order_by( $order );
+  # get the select to make the final amount of columns equal the original one
+  my ($select) = $sql =~ /^ \s* SELECT \s+ (.+?) \s+ FROM/ix
+    or croak "Unrecognizable SELECT: $sql";
 
-  $sql = <<"SQL";
-SELECT * FROM
-(
-   SELECT Q1.*, ROW_NUMBER() OVER( ) AS ROW_NUM FROM (
-      $sql
-      $order_by
-   ) Q1
-) Q2
-WHERE ROW_NUM BETWEEN $offset AND $last
+  # get the order_by only (or make up an order if none exists)
+  my $order_by = $self->_order_by(
+    (delete $order->{order_by}) || $self->_rno_default_order
+  );
 
-SQL
+  # whatever is left of the order_by
+  my $group_having = $self->_order_by($order);
 
+  my $qalias = $self->_quote ($self->{_dbic_rs_attrs}{alias});
+
+  $sql = sprintf (<<EOS, $offset + 1, $offset + $rows, );
+
+SELECT $select FROM (
+  SELECT $qalias.*, ROW_NUMBER() OVER($order_by ) AS rno__row__index FROM (
+    ${sql}${group_having}
+  ) $qalias
+) $qalias WHERE rno__row__index BETWEEN %d AND %d
+
+EOS
+
+  $sql =~ s/\s*\n\s*/ /g;   # easier to read in the debugger
   return $sql;
 }
 
-# Crappy Top based Limit/Offset support. MSSQL uses this currently,
-# but may have to switch to RowNumberOver one day
+# some databases are happy with OVER (), some need OVER (ORDER BY (SELECT (1)) )
+sub _rno_default_order {
+  return undef;
+}
+
+# Informix specific limit, almost like LIMIT/OFFSET
+sub _SkipFirst {
+  my ($self, $sql, $order, $rows, $offset) = @_;
+
+  $sql =~ s/^ \s* SELECT \s+ //ix
+    or croak "Unrecognizable SELECT: $sql";
+
+  return sprintf ('SELECT %s%s%s%s',
+    $offset
+      ? sprintf ('SKIP %d ', $offset)
+      : ''
+    ,
+    sprintf ('FIRST %d ', $rows),
+    $sql,
+    $self->_order_by ($order),
+  );
+}
+
+# Firebird specific limit, reverse of _SkipFirst for Informix
+sub _FirstSkip {
+  my ($self, $sql, $order, $rows, $offset) = @_;
+
+  $sql =~ s/^ \s* SELECT \s+ //ix
+    or croak "Unrecognizable SELECT: $sql";
+
+  return sprintf ('SELECT %s%s%s%s',
+    sprintf ('FIRST %d ', $rows),
+    $offset
+      ? sprintf ('SKIP %d ', $offset)
+      : ''
+    ,
+    $sql,
+    $self->_order_by ($order),
+  );
+}
+
+# Crappy Top based Limit/Offset support. Legacy from MSSQL.
 sub _Top {
   my ( $self, $sql, $order, $rows, $offset ) = @_;
 
@@ -312,7 +360,13 @@ sub insert {
   # which is sadly understood only by MySQL. Change default behavior here,
   # until SQLA2 comes with proper dialect support
   if (! $_[0] or (ref $_[0] eq 'HASH' and !keys %{$_[0]} ) ) {
-    return "INSERT INTO ${table} DEFAULT VALUES"
+    my $sql = "INSERT INTO ${table} DEFAULT VALUES";
+
+    if (my $ret = ($_[1]||{})->{returning} ) {
+      $sql .= $self->_insert_returning ($ret);
+    }
+
+    return $sql;
   }
 
   $self->SUPER::insert($table, @_);
@@ -377,7 +431,7 @@ sub _recurse_fields {
       $self->_sqlcase($func),
       $self->_recurse_fields($args),
       $as
-        ? sprintf (' %s %s', $self->_sqlcase('as'), $as)
+        ? sprintf (' %s %s', $self->_sqlcase('as'), $self->_quote ($as) )
         : ''
     );
 
@@ -455,6 +509,14 @@ sub _table {
   }
 }
 
+sub _generate_join_clause {
+    my ($self, $join_type) = @_;
+
+    return sprintf ('%s JOIN ',
+      $join_type ?  ' ' . uc($join_type) : ''
+    );
+}
+
 sub _recurse_from {
   my ($self, $from, @join) = @_;
   my @sqlf;
@@ -473,10 +535,7 @@ sub _recurse_from {
 
     $join_type = $self->{_default_jointype} if not defined $join_type;
 
-    my $join_clause = sprintf ('%s JOIN ',
-      $join_type ?  ' ' . uc($join_type) : ''
-    );
-    push @sqlf, $join_clause;
+    push @sqlf, $self->_generate_join_clause( $join_type );
 
     if (ref $to eq 'ARRAY') {
       push(@sqlf, '(', $self->_recurse_from(@$to), ')');

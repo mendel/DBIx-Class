@@ -37,6 +37,9 @@ sub add_columns {
   my $source = $class->result_source_instance;
   $source->add_columns(@cols);
   foreach my $c (grep { !ref } @cols) {
+    # If this is an augment definition get the real colname.
+    $c =~ s/^\+//;
+
     $class->register_column($c => $source->column_info($c));
   }
 }
@@ -75,6 +78,10 @@ sub primary_columns {
   shift->result_source_instance->primary_columns(@_);
 }
 
+sub _pri_cols {
+  shift->result_source_instance->_pri_cols(@_);
+}
+
 sub add_unique_constraint {
   shift->result_source_instance->add_unique_constraint(@_);
 }
@@ -106,4 +113,7 @@ sub relationship_info {
   shift->result_source_instance->relationship_info(@_);
 }
 
+sub has_relationship {
+  shift->result_source_instance->has_relationship(@_);
+}
 1;

@@ -23,13 +23,14 @@ statements with values bound to columns or conditions that are not strings will
 throw implicit type conversion errors.
 
 As long as a column L<data_type|DBIx::Class::ResultSource/add_columns> is
-defined, and it resolves to a base RDBMS native type via L</_native_data_type> as
+defined and resolves to a base RDBMS native type via L</_native_data_type> as
 defined in your Storage driver, the placeholder for this column will be
 converted to:
 
   CAST(? as $mapped_type)
 
-This option can also be enabled in L<DBIx::Class::Storage::DBI/connect_info> as:
+This option can also be enabled in
+L<connect_info|DBIx::Class::Storage::DBI/connect_info> as:
 
   on_connect_call => ['set_auto_cast']
 
@@ -76,7 +77,7 @@ Used as:
 
     on_connect_call => ['set_auto_cast']
 
-in L<DBIx::Class::Storage::DBI/connect_info>.
+in L<connect_info|DBIx::Class::Storage::DBI/connect_info>.
 
 =cut
 

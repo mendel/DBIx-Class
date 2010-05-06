@@ -3,7 +3,7 @@ package DBIx::Class::Storage::DBI::MSSQL;
 use strict;
 use warnings;
 
-use base qw/DBIx::Class::Storage::DBI::AmbiguousGlob DBIx::Class::Storage::DBI/;
+use base qw/DBIx::Class::Storage::DBI::UniqueIdentifier/;
 use mro 'c3';
 
 use List::Util();
@@ -66,42 +66,11 @@ sub insert_bulk {
   }
 }
 
-# support MSSQL GUID column types
-
 sub insert {
   my $self = shift;
   my ($source, $to_insert) = @_;
 
   my $supplied_col_info = $self->_resolve_column_info($source, [keys %$to_insert] );
-
-  my %guid_cols;
-  my @pk_cols = $source->primary_columns;
-  my %pk_cols;
-  @pk_cols{@pk_cols} = ();
-
-  my @pk_guids = grep {
-    $source->column_info($_)->{data_type}
-    &&
-    $source->column_info($_)->{data_type} =~ /^uniqueidentifier/i
-  } @pk_cols;
-
-  my @auto_guids = grep {
-    $source->column_info($_)->{data_type}
-    &&
-    $source->column_info($_)->{data_type} =~ /^uniqueidentifier/i
-    &&
-    $source->column_info($_)->{auto_nextval}
-  } grep { not exists $pk_cols{$_} } $source->columns;
-
-  my @get_guids_for =
-    grep { not exists $to_insert->{$_} } (@pk_guids, @auto_guids);
-
-  my $updated_cols = {};
-
-  for my $guid_col (@get_guids_for) {
-    my ($new_guid) = $self->_get_dbh->selectrow_array('SELECT NEWID()');
-    $updated_cols->{$guid_col} = $to_insert->{$guid_col} = $new_guid;
-  }
 
   my $is_identity_insert = (List::Util::first { $_->{is_auto_increment} } (values %$supplied_col_info) )
      ? 1
@@ -111,12 +80,11 @@ sub insert {
      $self->_set_identity_insert ($source->name);
   }
 
-  $updated_cols = { %$updated_cols, %{ $self->next::method(@_) } };
+  my $updated_cols = $self->next::method(@_);
 
   if ($is_identity_insert) {
      $self->_unset_identity_insert ($source->name);
   }
-
 
   return $updated_cols;
 }
@@ -190,7 +158,11 @@ sub _select_args_to_query {
 
   # see if this is an ordered subquery
   my $attrs = $_[3];
-  if ( scalar $self->_parse_order_by ($attrs->{order_by}) ) {
+  if (
+    $sql !~ /^ \s* SELECT \s+ TOP \s+ \d+ \s+ /xi
+      &&
+    scalar $self->_parse_order_by ($attrs->{order_by}) 
+  ) {
     $self->throw_exception(
       'An ordered subselect encountered - this is not safe! Please see "Ordered Subselects" in DBIx::Class::Storage::DBI::MSSQL
     ') unless $attrs->{unsafe_subselect_ok};
@@ -222,34 +194,19 @@ sub _svp_rollback {
   $self->_get_dbh->do("ROLLBACK TRANSACTION $name");
 }
 
-sub build_datetime_parser {
-  my $self = shift;
-  my $type = "DateTime::Format::Strptime";
-  eval "use ${type}";
-  $self->throw_exception("Couldn't load ${type}: $@") if $@;
-  return $type->new( pattern => '%Y-%m-%d %H:%M:%S' );  # %F %T
-}
+sub datetime_parser_type {
+  'DBIx::Class::Storage::DBI::MSSQL::DateTime::Format'
+} 
 
 sub sqlt_type { 'SQLServer' }
-
-sub _get_mssql_version {
-  my $self = shift;
-
-  my $data = $self->_get_dbh->selectrow_hashref('xp_msver ProductVersion');
-
-  if ($data->{Character_Value} =~ /^(\d+)\./) {
-    return $1;
-  } else {
-    $self->throw_exception(q{Your ProductVersion's Character_Value is missing or malformed!});
-  }
-}
 
 sub sql_maker {
   my $self = shift;
 
   unless ($self->_sql_maker) {
     unless ($self->{_sql_maker_opts}{limit_dialect}) {
-      my $version = eval { $self->_get_mssql_version; } || 0;
+
+      my $version = $self->_server_info->{normalized_dbms_version} || 0;
 
       $self->{_sql_maker_opts} = {
         limit_dialect => ($version >= 9 ? 'RowNumberOver' : 'Top'),
@@ -261,6 +218,69 @@ sub sql_maker {
   }
 
   return $self->_sql_maker;
+}
+
+sub _ping {
+  my $self = shift;
+
+  my $dbh = $self->_dbh or return 0;
+
+  local $dbh->{RaiseError} = 1;
+  local $dbh->{PrintError} = 0;
+
+  eval {
+    $dbh->do('select 1');
+  };
+
+  return $@ ? 0 : 1;
+}
+
+package # hide from PAUSE
+  DBIx::Class::Storage::DBI::MSSQL::DateTime::Format;
+
+my $datetime_format      = '%Y-%m-%d %H:%M:%S.%3N'; # %F %T 
+my $smalldatetime_format = '%Y-%m-%d %H:%M:%S';
+
+my ($datetime_parser, $smalldatetime_parser);
+
+sub parse_datetime {
+  shift;
+  require DateTime::Format::Strptime;
+  $datetime_parser ||= DateTime::Format::Strptime->new(
+    pattern  => $datetime_format,
+    on_error => 'croak',
+  );
+  return $datetime_parser->parse_datetime(shift);
+}
+
+sub format_datetime {
+  shift;
+  require DateTime::Format::Strptime;
+  $datetime_parser ||= DateTime::Format::Strptime->new(
+    pattern  => $datetime_format,
+    on_error => 'croak',
+  );
+  return $datetime_parser->format_datetime(shift);
+}
+
+sub parse_smalldatetime {
+  shift;
+  require DateTime::Format::Strptime;
+  $smalldatetime_parser ||= DateTime::Format::Strptime->new(
+    pattern  => $smalldatetime_format,
+    on_error => 'croak',
+  );
+  return $smalldatetime_parser->parse_datetime(shift);
+}
+
+sub format_smalldatetime {
+  shift;
+  require DateTime::Format::Strptime;
+  $smalldatetime_parser ||= DateTime::Format::Strptime->new(
+    pattern  => $smalldatetime_format,
+    on_error => 'croak',
+  );
+  return $smalldatetime_parser->format_datetime(shift);
 }
 
 1;
@@ -341,7 +361,7 @@ outright disabled for MSSQL.
 Thus compromise between usability and perfection is the MSSQL-specific
 L<resultset attribute|DBIx::Class::ResultSet/ATTRIBUTES> C<unsafe_subselect_ok>.
 It is deliberately not possible to set this on the Storage level, as the user
-should inspect (and preferrably regression-test) the return of every such
+should inspect (and preferably regression-test) the return of every such
 ResultSet individually. The example above would work if written like:
 
  $rs->search ({}, {
@@ -354,11 +374,11 @@ ResultSet individually. The example above would work if written like:
 If it is possible to rewrite the search() in a way that will avoid the need
 for this flag - you are urged to do so. If DBIC internals insist that an
 ordered subselect is necessary for an operation, and you believe there is a
-differnt/better way to get the same result - please file a bugreport.
+different/better way to get the same result - please file a bugreport.
 
 =head1 AUTHOR
 
-See L<DBIx::Class/CONTRIBUTORS>.
+See L<DBIx::Class/AUTHOR> and L<DBIx::Class/CONTRIBUTORS>.
 
 =head1 LICENSE
 

@@ -1,5 +1,92 @@
 Revision history for DBIx::Class
 
+        - Add a warning to load_namespaces if a class in ResultSet/
+          is not a subclass of DBIx::Class::ResultSet
+        - ::Storage::DBI now correctly preserves a parent $dbh from
+          terminating children, even during interpreter-global
+          out-of-order destruction
+        - InflateColumn::DateTime support for MSSQL via DBD::Sybase
+        - Millisecond precision support for MSSQL datetimes for
+          InflateColumn::DateTime
+        - Support connecting using $ENV{DBI_DSN} and $ENV{DBI_DRIVER}
+        - current_source_alias method on ResultSet objects to
+          determine the alias to use in programatically assembled
+          search()es (originally added in 0.08100 but unmentioned)
+        - Rewrite/unification of all subselecting limit emulations
+          (RNO, Top, RowNum) to be much more robust wrt complex joined
+          resultsets
+        - MSSQL limits now don't require nearly as many applications of
+          the unsafe_subselect_ok attribute, due to optimized queries
+        - Fix as_subselect_rs to not inject resultset class-wide where
+          conditions outside of the resulting subquery
+        - Depend on optimized SQL::Abstract (faster SQL generation)
+
+0.08121 2010-04-11 18:43:00 (UTC)
+        - Support for Firebird RDBMS with DBD::InterBase and ODBC
+        - Add core support for INSERT RETURNING (for storages that
+          supports this syntax, currently PostgreSQL and Firebird)
+        - Fix spurious warnings on multiple UTF8Columns component loads
+        - DBIx::Class::UTF8Columns entered deprecated state
+        - DBIx::Class::InflateColumn::File entered deprecated state
+        - DBIx::Class::Optional::Dependencies left experimental state
+        - Add req_group_list to Opt::Deps (RT#55211)
+        - Add support for mysql-specific STRAIGHT_JOIN (RT#55579)
+        - Cascading delete/update are now wrapped in a transaction
+          for atomicity
+        - Fix accidental autovivification of ENV vars
+        - Fix update_all and delete_all to be wrapped in a transaction
+        - Fix multiple deficiencies when using MultiCreate with
+          data-encoder components (e.g. ::EncodedColumn)
+        - Fix regression where SQL files with comments were not
+          handled properly by ::Schema::Versioned.
+        - Fix regression on not properly throwing when $obj->relationship
+          is unresolvable
+        - Fix the join-optimiser to consider unqualified column names
+          whenever possible
+        - Fix an issue with multiple same-table joins confusing the join
+          optimizier
+        - Add has_relationship method to row objects
+        - Fix regression in set_column on PK-less objects
+        - Better error text on malformed/missing relationships
+        - Add POD about the significance of PK columns
+        - Fix for SQLite to ignore the (unsupported) { for => ... }
+          attribute
+        - Fix ambiguity in default directory handling of create_ddl_dir
+          (RT#54063)
+        - Support add_columns('+colname' => { ... }) to augment column
+          definitions.
+
+0.08120 2010-02-24 08:58:00 (UTC)
+        - Make sure possibly overwritten deployment_statements methods in
+          schemas get called on $schema->deploy
+        - Fix count() with group_by aliased-function resultsets
+        - with_deferred_fk_checks() Oracle support
+        - Massive refactor and cleanup of primary key handling
+        - Fixed regression losing custom result_class (really this time)
+          (RT#54697)
+        - Fixed regression in DBIC SQLT::Parser failing with a classname
+          (as opposed to a schema object)
+        - Changes to Storage::DBI::Oracle to accomodate changes in latest
+          SQL::Translator (quote handling)
+        - Make sure deployment_statements is per-storage overridable
+        - Fix dbicadmin's (lack of) POD
+
+0.08119 2010-02-15 09:36:00 (UTC)
+        - Add $rs->is_ordered to test for existing order_by on a resultset
+        - Add as_subselect_rs to DBIC::ResultSet from
+          DBIC::Helper::ResultSet::VirtualView::as_virtual_view
+        - Refactor dbicadmin adding DDL manipulation capabilities
+        - New optional dependency manager to aid extension writers
+        - Depend on newest bugfixed Moose
+        - Make resultset chaining consistent wrt selection specification
+        - Storage::DBI::Replicated cleanup
+        - Fix autoinc PKs without an autoinc flag on Sybase ASA
+
+0.08118 2010-02-08 11:53:00 (UTC)
+        - Fix a bug causing UTF8 columns not to be decoded (RT#54395)
+        - Fix bug in One->Many->One prefetch-collapse handling (RT#54039)
+        - Cleanup handling of relationship accessor types
+
 0.08117 2010-02-05 17:10:00 (UTC)
         - Perl 5.8.1 is now the minimum supported version
         - Massive optimization of the join resolution code - now joins

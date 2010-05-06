@@ -141,7 +141,7 @@ Next, you can execute your complex query using bind parameters like this:
   );
 
 ... and you'll get back a perfect L<DBIx::Class::ResultSet> (except, of course,
-that you cannot modify the rows it contains, ie. cannot call L</update>,
+that you cannot modify the rows it contains, e.g. cannot call L</update>,
 L</delete>, ...  on it).
 
 Note that you cannot have bind parameters unless is_virtual is set to true.
@@ -201,7 +201,7 @@ to access the returned value:
   # SELECT name name, LENGTH( name )
   # FROM artist
 
-Note that the C<as> attribute B<has absolutely nothing to do> with the sql
+Note that the C<as> attribute B<has absolutely nothing to do> with the SQL
 syntax C< SELECT foo AS bar > (see the documentation in 
 L<DBIx::Class::ResultSet/ATTRIBUTES>). You can control the C<AS> part of the
 generated SQL via the C<-as> field attribute as follows:
@@ -292,7 +292,7 @@ See also L</Using SQL functions on the left hand side of a comparison>.
   my $count = $rs->count;
 
   # Equivalent SQL:
-  # SELECT COUNT( * ) FROM (SELECT me.name FROM artist me GROUP BY me.name) count_subq:
+  # SELECT COUNT( * ) FROM (SELECT me.name FROM artist me GROUP BY me.name) me:
 
 =head2 Grouping results
 
@@ -329,7 +329,7 @@ You can write subqueries relatively easily in DBIC.
     artist_id => { 'IN' => $inside_rs->get_column('id')->as_query },
   });
 
-The usual operators ( =, !=, IN, NOT IN, etc) are supported.
+The usual operators ( =, !=, IN, NOT IN, etc.) are supported.
 
 B<NOTE>: You have to explicitly use '=' when doing an equality comparison.
 The following will B<not> work:
@@ -367,8 +367,8 @@ That creates the following SQL:
 
 =head2 Predefined searches
 
-You can write your own L<DBIx::Class::ResultSet> class by inheriting from it
-and defining often used searches as methods:
+You can define frequently used searches as methods by subclassing
+L<DBIx::Class::ResultSet>:
 
   package My::DBIC::ResultSet::CD;
   use strict;
@@ -411,9 +411,15 @@ Then call your new method in your code:
 
 Using SQL functions on the left hand side of a comparison is generally not a
 good idea since it requires a scan of the entire table. (Unless your RDBMS
-supports indexes on expressions - including return values of functions -, and
+supports indexes on expressions - including return values of functions - and
 you create an index on the return value of the function in question.) However,
 it can be accomplished with C<DBIx::Class> when necessary.
+
+Your approach for doing so will depend on whether you have turned
+quoting on via the C<quote_char> and C<name_sep> attributes. If you
+explicitly defined C<quote_char> and C<name_sep> in your
+C<connect_info> (see L<DBIx::Class::Storage::DBI/"connect_info">) then
+you are using quoting, otherwise not.
 
 If you do not have quoting on, simply include the function in your search
 specification as you would any column:
@@ -771,7 +777,7 @@ B<Schema definition>
 
     package My::App::Schema;
 
-    use base DBIx::Class::Schema;
+    use base 'DBIx::Class::Schema';
 
     # load subclassed classes from My::App::Schema::Result/ResultSet
     __PACKAGE__->load_namespaces;
@@ -791,7 +797,7 @@ B<Result-Subclass definition>
 
     use strict;
     use warnings;
-    use base My::Shared::Model::Result::Baz;
+    use base 'My::Shared::Model::Result::Baz';
 
     # WARNING: Make sure you call table() again in your subclass,
     # otherwise DBIx::Class::ResultSourceProxy::Table will not be called
@@ -814,7 +820,7 @@ this example we have a single user table that carries a boolean bit
 for admin.  We would like like to give the admin users
 objects (L<DBIx::Class::Row>) the same methods as a regular user but
 also special admin only methods.  It doesn't make sense to create two
-seperate proxy-class files for this.  We would be copying all the user
+separate proxy-class files for this.  We would be copying all the user
 methods into the Admin class.  There is a cleaner way to accomplish
 this.
 
@@ -1217,6 +1223,8 @@ callback routine.
 
 =head1 TRANSACTIONS
 
+=head2 Transactions with txn_do
+
 As of version 0.04001, there is improved transaction support in
 L<DBIx::Class::Storage> and L<DBIx::Class::Schema>.  Here is an
 example of the recommended way to use it:
@@ -1248,11 +1256,16 @@ example of the recommended way to use it:
     deal_with_failed_transaction();
   }
 
+Note: by default C<txn_do> will re-run the coderef one more time if an
+error occurs due to client disconnection (e.g. the server is bounced).
+You need to make sure that your coderef can be invoked multiple times
+without terrible side effects.
+
 Nested transactions will work as expected. That is, only the outermost
 transaction will actually issue a commit to the $dbh, and a rollback
 at any level of any transaction will cause the entire nested
 transaction to fail.
- 
+
 =head2 Nested transactions and auto-savepoints
 
 If savepoints are supported by your RDBMS, it is possible to achieve true
@@ -1268,7 +1281,7 @@ row.
   my $schema = MySchema->connect("dbi:Pg:dbname=my_db");
 
   # Start a transaction. Every database change from here on will only be 
-  # commited into the database if the eval block succeeds.
+  # committed into the database if the eval block succeeds.
   eval {
     $schema->txn_do(sub {
       # SQL: BEGIN WORK;
@@ -1321,7 +1334,7 @@ row.
   };
   if ($@) {
     # There was an error while handling the $job. Rollback all changes
-    # since the transaction started, including the already commited
+    # since the transaction started, including the already committed
     # ('released') savepoints. There will be neither a new $job nor any
     # $thing entry in the database.
 
@@ -1344,8 +1357,18 @@ commits are happening, but it works just the same as for plain L<<txn_do>>: If
 the C<eval>-block around C<txn_do> fails, a rollback is issued. If the C<eval>
 succeeds, the transaction is committed (or the savepoint released).
 
-While you can get more fine-grained controll using C<svp_begin>, C<svp_release>
+While you can get more fine-grained control using C<svp_begin>, C<svp_release>
 and C<svp_rollback>, it is strongly recommended to use C<txn_do> with coderefs.
+
+=head2 Simple Transactions with DBIx::Class::Storage::TxnScopeGuard
+
+An easy way to use transactions is with
+L<DBIx::Class::Storage::TxnScopeGuard>. See L</Automatically creating
+related objects> for an example.
+
+Note that unlike txn_do, TxnScopeGuard will only make sure the connection is
+alive when issuing the C<BEGIN> statement. It will not (and really can not)
+retry if the server goes away mid-operations, unlike C<txn_do>.
 
 =head1 SQL
 
@@ -1621,10 +1644,10 @@ B<Deploy update to customers>
 Add the L<DBIx::Class::Schema::Versioned> schema component to your
 Schema class. This will add a new table to your database called
 C<dbix_class_schema_vesion> which will keep track of which version is installed
-and warn if the user trys to run a newer schema version than the
+and warn if the user tries to run a newer schema version than the
 database thinks it has.
 
-Alternatively, you can send the conversion sql scripts to your
+Alternatively, you can send the conversion SQL scripts to your
 customers as above.
 
 =head2 Setting quoting for the generated SQL
@@ -1706,7 +1729,7 @@ methods:
     }
   );
 
-In conditions (eg. C<\%cond> in the L<DBIx::Class::ResultSet/search> family of
+In conditions (e.g. C<\%cond> in the L<DBIx::Class::ResultSet/search> family of
 methods) you cannot directly use array references (since this is interpreted as
 a list of values to be C<OR>ed), but you can use the following syntax to force
 passing them as bind values:
@@ -1723,6 +1746,75 @@ L<DBIx::Class> sets L<SQL::Abstract/bindtype> to C<columns>, so you must pass
 the bind values (the C<[1, 2, 3]> arrayref in the above example) wrapped in
 arrayrefs together with the column name, like this: C<< [column_name => value]
 >>.
+
+=head2 Using Unicode
+
+When using unicode character data there are two alternatives -
+either your database supports unicode characters (including setting
+the utf8 flag on the returned string), or you need to encode/decode
+data appropriately each time a string field is inserted into or
+retrieved from the database. It is better to avoid
+encoding/decoding data and to use your database's own unicode
+capabilities if at all possible.
+
+The L<DBIx::Class::UTF8Columns> component handles storing selected
+unicode columns in a database that does not directly support
+unicode. If used with a database that does correctly handle unicode
+then strange and unexpected data corrupt B<will> occur.
+
+The Catalyst Wiki Unicode page at
+L<http://wiki.catalystframework.org/wiki/tutorialsandhowtos/using_unicode>
+has additional information on the use of Unicode with Catalyst and
+DBIx::Class.
+
+The following databases do correctly handle unicode data:-
+
+=head3 MySQL
+
+MySQL supports unicode, and will correctly flag utf8 data from the
+database if the C<mysql_enable_utf8> is set in the connect options.
+
+  my $schema = My::Schema->connection('dbi:mysql:dbname=test',
+                                      $user, $pass,
+                                      { mysql_enable_utf8 => 1} );
+  
+
+When set, a data retrieved from a textual column type (char,
+varchar, etc) will have the UTF-8 flag turned on if necessary. This
+enables character semantics on that string. You will also need to
+ensure that your database / table / column is configured to use
+UTF8. See Chapter 10 of the mysql manual for details.
+
+See L<DBD::mysql> for further details.
+
+=head3 Oracle
+
+Information about Oracle support for unicode can be found in
+L<DBD::Oracle/Unicode>.
+
+=head3 PostgreSQL
+
+PostgreSQL supports unicode if the character set is correctly set
+at database creation time. Additionally the C<pg_enable_utf8>
+should be set to ensure unicode data is correctly marked.
+
+  my $schema = My::Schema->connection('dbi:Pg:dbname=test',
+                                      $user, $pass,
+                                      { pg_enable_utf8 => 1} );
+
+Further information can be found in L<DBD::Pg>.
+
+=head3 SQLite
+
+SQLite version 3 and above natively use unicode internally. To
+correctly mark unicode strings taken from the database, the
+C<sqlite_unicode> flag should be set at connect time (in versions
+of L<DBD::SQLite> prior to 1.27 this attribute was named
+C<unicode>).
+
+  my $schema = My::Schema->connection('dbi:SQLite:/tmp/test.db',
+                                      '', '',
+                                      { sqlite_unicode => 1} );
 
 =head1 BOOTSTRAPPING/MIGRATING
 
@@ -1821,12 +1913,27 @@ You can accomplish this by overriding C<insert> on your objects:
   sub insert {
     my ( $self, @args ) = @_;
     $self->next::method(@args);
-    $self->cds->new({})->fill_from_artist($self)->insert;
+    $self->create_related ('cds', \%initial_cd_data );
     return $self;
   }
 
-where C<fill_from_artist> is a method you specify in C<CD> which sets
-values in C<CD> based on the data in the C<Artist> object you pass in.
+If you want to wrap the two inserts in a transaction (for consistency,
+an excellent idea), you can use the awesome
+L<DBIx::Class::Storage::TxnScopeGuard>:
+
+  sub insert {
+    my ( $self, @args ) = @_;
+
+    my $guard = $self->result_source->schema->txn_scope_guard;
+
+    $self->next::method(@args);
+    $self->create_related ('cds', \%initial_cd_data );
+
+    $guard->commit;
+
+    return $self
+  }
+
 
 =head2 Wrapping/overloading a column accessor
 
@@ -1976,6 +2083,47 @@ array:
 You could then create average, high and low execution times for an SQL
 statement and dig down to see if certain parameters cause aberrant behavior.
 You might want to check out L<DBIx::Class::QueryLog> as well.
+
+=head1 IMPROVING PERFORMANCE
+
+=over
+
+=item *
+
+Install L<Class::XSAccessor> to speed up L<Class::Accessor::Grouped>.
+
+=item *
+
+On Perl 5.8 install L<Class::C3::XS>.
+
+=item *
+
+L<prefetch|DBIx::Class::ResultSet/prefetch> relationships, where possible. See
+L</Using joins and prefetch>.
+
+=item *
+
+Use L<populate|DBIx::Class::ResultSet/populate> in void context to insert data
+when you don't need the resulting L<DBIx::Class::Row> objects, if possible, but
+see the caveats.
+
+When inserting many rows, for best results, populate a large number of rows at a
+time, but not so large that the table is locked for an unacceptably long time.
+
+If using L<create|DBIx::Class::ResultSet/create> instead, use a transaction and
+commit every C<X> rows; where C<X> gives you the best performance without
+locking the table for too long. 
+
+=item *
+
+When selecting many rows, if you don't need full-blown L<DBIx::Class::Row>
+objects, consider using L<DBIx::Class::ResultClass::HashRefInflator>.
+
+=item *
+
+See also L</STARTUP SPEED> and L</MEMORY USAGE> in this document.
+
+=back
 
 =head1 STARTUP SPEED
 

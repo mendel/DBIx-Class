@@ -49,7 +49,7 @@ With this driver there is unfortunately no way to get the C<last_insert_id>
 without doing a C<SELECT MAX(col)>. This is done safely in a transaction
 (locking the table.) See L</INSERTS WITH PLACEHOLDERS>.
 
-A recommended L<DBIx::Class::Storage::DBI/connect_info> setting:
+A recommended L<connect_info|DBIx::Class::Storage::DBI/connect_info> setting:
 
   on_connect_call => [['datetime_setup'], ['blob_setup', log_on_update => 0]]
 
@@ -728,10 +728,9 @@ sub _remove_blob_cols_array {
 sub _update_blobs {
   my ($self, $source, $blob_cols, $where) = @_;
 
-  my (@primary_cols) = $source->primary_columns;
-
-  $self->throw_exception('Cannot update TEXT/IMAGE column(s) without a primary key')
-    unless @primary_cols;
+  my @primary_cols = eval { $source->_pri_cols };
+  $self->throw_exception("Cannot update TEXT/IMAGE column(s): $@")
+    if $@;
 
 # check if we're updating a single row by PK
   my $pk_cols_in_where = 0;
@@ -763,10 +762,9 @@ sub _insert_blobs {
   my $table = $source->name;
 
   my %row = %$row;
-  my (@primary_cols) = $source->primary_columns;
-
-  $self->throw_exception('Cannot update TEXT/IMAGE column(s) without a primary key')
-    unless @primary_cols;
+  my @primary_cols = eval { $source->_pri_cols} ;
+  $self->throw_exception("Cannot update TEXT/IMAGE column(s): $@")
+    if $@;
 
   $self->throw_exception('Cannot update TEXT/IMAGE column(s) without primary key values')
     if ((grep { defined $row{$_} } @primary_cols) != @primary_cols);
@@ -848,7 +846,7 @@ Used as:
 
   on_connect_call => 'datetime_setup'
 
-In L<DBIx::Class::Storage::DBI/connect_info> to set:
+In L<connect_info|DBIx::Class::Storage::DBI/connect_info> to set:
 
   $dbh->syb_date_fmt('ISO_strict'); # output fmt: 2004-08-21T14:36:48.080Z
   $dbh->do('set dateformat mdy');   # input fmt:  08/13/1979 18:08:55.080
@@ -977,7 +975,7 @@ for the C<CAST>s is taken from the L<DBIx::Class::ResultSource/data_type>
 definitions in your Result classes, and are mapped to a Sybase type (if it isn't
 already) using a mapping based on L<SQL::Translator>.
 
-In other configurations, placeholers will work just as they do with the Sybase
+In other configurations, placeholders will work just as they do with the Sybase
 Open Client libraries.
 
 Inserts or updates of TEXT/IMAGE columns will B<NOT> work with FreeTDS.
@@ -998,8 +996,8 @@ it's a session variable.
 
 =head1 TRANSACTIONS
 
-Due to limitations of the TDS protocol, L<DBD::Sybase>, or both; you cannot
-begin a transaction while there are active cursors; nor can you use multiple
+Due to limitations of the TDS protocol, L<DBD::Sybase>, or both, you cannot
+begin a transaction while there are active cursors, nor can you use multiple
 active cursors within a transaction. An active cursor is, for example, a
 L<ResultSet|DBIx::Class::ResultSet> that has been executed using C<next> or
 C<first> but has not been exhausted or L<reset|DBIx::Class::ResultSet/reset>.
@@ -1071,11 +1069,12 @@ or
 instead.
 
 However, the C<LongReadLen> you pass in
-L<DBIx::Class::Storage::DBI/connect_info> is used to execute the equivalent
-C<SET TEXTSIZE> command on connection.
+L<connect_info|DBIx::Class::Storage::DBI/connect_info> is used to execute the
+equivalent C<SET TEXTSIZE> command on connection.
 
-See L</connect_call_blob_setup> for a L<DBIx::Class::Storage::DBI/connect_info>
-setting you need to work with C<IMAGE> columns.
+See L</connect_call_blob_setup> for a
+L<connect_info|DBIx::Class::Storage::DBI/connect_info> setting you need to work
+with C<IMAGE> columns.
 
 =head1 BULK API
 

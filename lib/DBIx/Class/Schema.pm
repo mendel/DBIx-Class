@@ -82,7 +82,7 @@ particular which module inherits off which.
 
 With no arguments, this method uses L<Module::Find> to load all your
 Result classes from a sub-namespace F<Result> under your Schema class'
-namespace. Eg. With a Schema of I<MyDB::Schema> all files in
+namespace, i.e. with a Schema of I<MyDB::Schema> all files in
 I<MyDB::Schema::Result> are assumed to be Result classes.
 
 It also finds all ResultSet classes in the namespace F<ResultSet> and
@@ -271,6 +271,10 @@ sub load_namespaces {
       }
       elsif($rs_class ||= $default_resultset_class) {
         $class->ensure_class_loaded($rs_class);
+        if(!$rs_class->isa("DBIx::Class::ResultSet")) {
+            carp "load_namespaces found ResultSet class $rs_class that does not subclass DBIx::Class::ResultSet";
+        }
+
         $class->_ns_get_rsrc_instance ($result_class)->resultset_class($rs_class);
       }
 
@@ -669,7 +673,7 @@ sub txn_scope_guard {
 
 Begins a transaction (does nothing if AutoCommit is off). Equivalent to
 calling $schema->storage->txn_begin. See
-L<DBIx::Class::Storage::DBI/"txn_begin"> for more information.
+L<DBIx::Class::Storage/"txn_begin"> for more information.
 
 =cut
 
@@ -685,7 +689,7 @@ sub txn_begin {
 =head2 txn_commit
 
 Commits the current transaction. Equivalent to calling
-$schema->storage->txn_commit. See L<DBIx::Class::Storage::DBI/"txn_commit">
+$schema->storage->txn_commit. See L<DBIx::Class::Storage/"txn_commit">
 for more information.
 
 =cut
@@ -703,7 +707,7 @@ sub txn_commit {
 
 Rolls back the current transaction. Equivalent to calling
 $schema->storage->txn_rollback. See
-L<DBIx::Class::Storage::DBI/"txn_rollback"> for more information.
+L<DBIx::Class::Storage/"txn_rollback"> for more information.
 
 =cut
 
@@ -748,7 +752,7 @@ Otherwise, each set of data is inserted into the database using
 L<DBIx::Class::ResultSet/create>, and a arrayref of the resulting row
 objects is returned.
 
-i.e.,
+e.g.
 
   $schema->populate('Artist', [
     [ qw/artistid name/ ],
@@ -851,7 +855,7 @@ attached to the current schema.
 
 It also attaches a corresponding L<DBIx::Class::ResultSource> object to the
 new $schema object. If C<$additional_base_class> is given, the new composed
-classes will inherit from first the corresponding classe from the current
+classes will inherit from first the corresponding class from the current
 schema then the base class.
 
 For example, for a schema with My::Schema::CD and My::Schema::Artist classes,
@@ -927,7 +931,7 @@ sub setup_connection_class {
 
 Creates a new savepoint (does nothing outside a transaction). 
 Equivalent to calling $schema->storage->svp_begin.  See
-L<DBIx::Class::Storage::DBI/"svp_begin"> for more information.
+L<DBIx::Class::Storage/"svp_begin"> for more information.
 
 =cut
 
@@ -944,7 +948,7 @@ sub svp_begin {
 
 Releases a savepoint (does nothing outside a transaction). 
 Equivalent to calling $schema->storage->svp_release.  See
-L<DBIx::Class::Storage::DBI/"svp_release"> for more information.
+L<DBIx::Class::Storage/"svp_release"> for more information.
 
 =cut
 
@@ -961,7 +965,7 @@ sub svp_release {
 
 Rollback to a savepoint (does nothing outside a transaction). 
 Equivalent to calling $schema->storage->svp_rollback.  See
-L<DBIx::Class::Storage::DBI/"svp_rollback"> for more information.
+L<DBIx::Class::Storage/"svp_rollback"> for more information.
 
 =cut
 
@@ -1155,7 +1159,7 @@ sub ddl_filename {
 
 Provided as the recommended way of thawing schema objects. You can call 
 C<Storable::thaw> directly if you wish, but the thawed objects will not have a
-reference to any schema, so are rather useless
+reference to any schema, so are rather useless.
 
 =cut
 
@@ -1167,8 +1171,8 @@ sub thaw {
 
 =head2 freeze
 
-This doesn't actualy do anything more than call L<Storable/freeze>, it is just
-provided here for symetry.
+This doesn't actually do anything more than call L<Storable/freeze>, it is just
+provided here for symmetry.
 
 =cut
 

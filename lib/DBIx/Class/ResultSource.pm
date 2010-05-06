@@ -139,6 +139,13 @@ The column names given will be created as accessor methods on your
 L<DBIx::Class::Row> objects. You can change the name of the accessor
 by supplying an L</accessor> in the column_info hash.
 
+If a column name beginning with a plus sign ('+col1') is provided, the
+attributes provided will be merged with any existing attributes for the
+column, with the new attributes taking precedence in the case that an
+attribute already exists. Using this without a hashref 
+(C<< $source->add_columns(qw/+col1 +col2/) >>) is legal, but useless --
+it does the same thing it would do without the plus.
+
 The contents of the column_info are not set in stone. The following
 keys are currently recognised/used by DBIx::Class:
 
@@ -250,9 +257,9 @@ sequence, if you do not use a trigger to get the nextval, you have to set the
 L</sequence> value as well.
 
 Also set this for MSSQL columns with the 'uniqueidentifier'
-L<DBIx::Class::ResultSource/data_type> whose values you want to automatically
-generate using C<NEWID()>, unless they are a primary key in which case this will
-be done anyway.
+L<data_type|DBIx::Class::ResultSource/data_type> whose values you want to
+automatically generate using C<NEWID()>, unless they are a primary key in which
+case this will be done anyway.
 
 =item extra
 
@@ -288,9 +295,17 @@ sub add_columns {
   my @added;
   my $columns = $self->_columns;
   while (my $col = shift @cols) {
+    my $column_info = {};
+    if ($col =~ s/^\+//) {
+      $column_info = $self->column_info($col);
+    }
+
     # If next entry is { ... } use that for the column info, if not
     # use an empty hashref
-    my $column_info = ref $cols[0] ? shift(@cols) : {};
+    if (ref $cols[0]) {
+      my $new_info = shift(@cols);
+      %$column_info = (%$column_info, %$new_info);
+    }
     push(@added, $col) unless exists $columns->{$col};
     $columns->{$col} = $column_info;
   }
@@ -465,10 +480,11 @@ called after L</add_columns>.
 Additionally, defines a L<unique constraint|add_unique_constraint>
 named C<primary>.
 
-The primary key columns are used by L<DBIx::Class::PK::Auto> to
-retrieve automatically created values from the database. They are also
-used as default joining columns when specifying relationships, see
-L<DBIx::Class::Relationship>.
+Note: you normally do want to define a primary key on your sources
+B<even if the underlying database table does not have a primary key>.
+See
+L<DBIx::Class::Intro/The Significance and Importance of Primary Keys>
+for more info.
 
 =cut
 
@@ -501,6 +517,19 @@ L</set_primary_key>.
 
 sub primary_columns {
   return @{shift->_primaries||[]};
+}
+
+# a helper method that will automatically die with a descriptive message if
+# no pk is defined on the source in question. For internal use to save
+# on if @pks... boilerplate
+sub _pri_cols {
+  my $self = shift;
+  my @pcols = $self->primary_columns
+    or $self->throw_exception (sprintf(
+      "Operation requires a primary key to be declared on '%s' via set_primary_key",
+      $self->source_name,
+    ));
+  return @pcols;
 }
 
 =head2 add_unique_constraint
@@ -1188,12 +1217,6 @@ sub _compare_relationship_keys {
   return $found;
 }
 
-sub resolve_join {
-  carp 'resolve_join is a private method, stop calling it';
-  my $self = shift;
-  $self->_resolve_join (@_);
-}
-
 # Returns the {from} structure used to express JOIN conditions
 sub _resolve_join {
   my ($self, $join, $alias, $seen, $jpath, $parent_force_left) = @_;
@@ -1222,7 +1245,7 @@ sub _resolve_join {
     for my $rel (keys %$join) {
 
       my $rel_info = $self->relationship_info($rel)
-        or $self->throw_exception("No such relationship ${rel}");
+        or $self->throw_exception("No such relationship '$rel' on " . $self->source_name);
 
       my $force_left = $parent_force_left;
       $force_left ||= lc($rel_info->{attrs}{join_type}||'') eq 'left';
@@ -1252,7 +1275,7 @@ sub _resolve_join {
     );
 
     my $rel_info = $self->relationship_info($join)
-      or $self->throw_exception("No such relationship ${join}");
+      or $self->throw_exception("No such relationship $join on " . $self->source_name);
 
     my $rel_src = $self->related_source($join);
     return [ { $as => $rel_src->from,
@@ -1262,7 +1285,11 @@ sub _resolve_join {
                   : $rel_info->{attrs}{join_type}
                 ,
                -join_path => [@$jpath, { $join => $as } ],
-               -is_single => (List::Util::first { $rel_info->{attrs}{accessor} eq $_ } (qw/single filter/) ),
+               -is_single => (
+                  $rel_info->{attrs}{accessor}
+                    &&
+                  List::Util::first { $rel_info->{attrs}{accessor} eq $_ } (qw/single filter/)
+                ),
                -alias => $as,
                -relation_chain_depth => $seen->{-relation_chain_depth} || 0,
              },
@@ -1373,77 +1400,6 @@ sub _resolve_condition {
   }
 }
 
-# Legacy code, needs to go entirely away (fully replaced by _resolve_prefetch)
-sub resolve_prefetch {
-  carp 'resolve_prefetch is a private method, stop calling it';
-
-  my ($self, $pre, $alias, $seen, $order, $collapse) = @_;
-  $seen ||= {};
-  if( ref $pre eq 'ARRAY' ) {
-    return
-      map { $self->resolve_prefetch( $_, $alias, $seen, $order, $collapse ) }
-        @$pre;
-  }
-  elsif( ref $pre eq 'HASH' ) {
-    my @ret =
-    map {
-      $self->resolve_prefetch($_, $alias, $seen, $order, $collapse),
-      $self->related_source($_)->resolve_prefetch(
-               $pre->{$_}, "${alias}.$_", $seen, $order, $collapse)
-    } keys %$pre;
-    return @ret;
-  }
-  elsif( ref $pre ) {
-    $self->throw_exception(
-      "don't know how to resolve prefetch reftype ".ref($pre));
-  }
-  else {
-    my $count = ++$seen->{$pre};
-    my $as = ($count > 1 ? "${pre}_${count}" : $pre);
-    my $rel_info = $self->relationship_info( $pre );
-    $self->throw_exception( $self->name . " has no such relationship '$pre'" )
-      unless $rel_info;
-    my $as_prefix = ($alias =~ /^.*?\.(.+)$/ ? $1.'.' : '');
-    my $rel_source = $self->related_source($pre);
-
-    if (exists $rel_info->{attrs}{accessor}
-         && $rel_info->{attrs}{accessor} eq 'multi') {
-      $self->throw_exception(
-        "Can't prefetch has_many ${pre} (join cond too complex)")
-        unless ref($rel_info->{cond}) eq 'HASH';
-      my $dots = @{[$as_prefix =~ m/\./g]} + 1; # +1 to match the ".${as_prefix}"
-      if (my ($fail) = grep { @{[$_ =~ m/\./g]} == $dots }
-                         keys %{$collapse}) {
-        my ($last) = ($fail =~ /([^\.]+)$/);
-        carp (
-          "Prefetching multiple has_many rels ${last} and ${pre} "
-          .(length($as_prefix)
-            ? "at the same level (${as_prefix}) "
-            : "at top level "
-          )
-          . 'will explode the number of row objects retrievable via ->next or ->all. '
-          . 'Use at your own risk.'
-        );
-      }
-      #my @col = map { (/^self\.(.+)$/ ? ("${as_prefix}.$1") : ()); }
-      #              values %{$rel_info->{cond}};
-      $collapse->{".${as_prefix}${pre}"} = [ $rel_source->primary_columns ];
-        # action at a distance. prepending the '.' allows simpler code
-        # in ResultSet->_collapse_result
-      my @key = map { (/^foreign\.(.+)$/ ? ($1) : ()); }
-                    keys %{$rel_info->{cond}};
-      my @ord = (ref($rel_info->{attrs}{order_by}) eq 'ARRAY'
-                   ? @{$rel_info->{attrs}{order_by}}
-                   : (defined $rel_info->{attrs}{order_by}
-                       ? ($rel_info->{attrs}{order_by})
-                       : ()));
-      push(@$order, map { "${as}.$_" } (@key, @ord));
-    }
-
-    return map { [ "${as}.$_", "${as_prefix}${pre}.$_", ] }
-      $rel_source->columns;
-  }
-}
 
 # Accepts one or more relationships for the current source and returns an
 # array of column names for each of those relationships. Column names are
@@ -1487,13 +1443,12 @@ sub _resolve_prefetch {
     my $as = shift @{$p->{-join_aliases}};
 
     my $rel_info = $self->relationship_info( $pre );
-    $self->throw_exception( $self->name . " has no such relationship '$pre'" )
+    $self->throw_exception( $self->source_name . " has no such relationship '$pre'" )
       unless $rel_info;
     my $as_prefix = ($alias =~ /^.*?\.(.+)$/ ? $1.'.' : '');
     my $rel_source = $self->related_source($pre);
 
-    if (exists $rel_info->{attrs}{accessor}
-         && $rel_info->{attrs}{accessor} eq 'multi') {
+    if ($rel_info->{attrs}{accessor} && $rel_info->{attrs}{accessor} eq 'multi') {
       $self->throw_exception(
         "Can't prefetch has_many ${pre} (join cond too complex)")
         unless ref($rel_info->{cond}) eq 'HASH';
@@ -1513,14 +1468,15 @@ sub _resolve_prefetch {
       }
       #my @col = map { (/^self\.(.+)$/ ? ("${as_prefix}.$1") : ()); }
       #              values %{$rel_info->{cond}};
-      $collapse->{".${as_prefix}${pre}"} = [ $rel_source->primary_columns ];
+      $collapse->{".${as_prefix}${pre}"} = [ $rel_source->_pri_cols ];
         # action at a distance. prepending the '.' allows simpler code
         # in ResultSet->_collapse_result
       my @key = map { (/^foreign\.(.+)$/ ? ($1) : ()); }
                     keys %{$rel_info->{cond}};
       my @ord = (ref($rel_info->{attrs}{order_by}) eq 'ARRAY'
                    ? @{$rel_info->{attrs}{order_by}}
-                   : (defined $rel_info->{attrs}{order_by}
+   
+                : (defined $rel_info->{attrs}{order_by}
                        ? ($rel_info->{attrs}{order_by})
                        : ()));
       push(@$order, map { "${as}.$_" } (@key, @ord));
@@ -1548,7 +1504,7 @@ Returns the result source object for the given relationship.
 sub related_source {
   my ($self, $rel) = @_;
   if( !$self->has_relationship( $rel ) ) {
-    $self->throw_exception("No such relationship '$rel'");
+    $self->throw_exception("No such relationship '$rel' on " . $self->source_name);
   }
   return $self->schema->source($self->relationship_info($rel)->{source});
 }
@@ -1570,7 +1526,7 @@ Returns the class name for objects in the given relationship.
 sub related_class {
   my ($self, $rel) = @_;
   if( !$self->has_relationship( $rel ) ) {
-    $self->throw_exception("No such relationship '$rel'");
+    $self->throw_exception("No such relationship '$rel' on " . $self->source_name);
   }
   return $self->schema->class($self->relationship_info($rel)->{source});
 }
@@ -1638,7 +1594,7 @@ Creates a new ResultSource object.  Not normally called directly by end users.
   __PACKAGE__->column_info_from_storage(1);
 
 Enables the on-demand automatic loading of the above column
-metadata from storage as neccesary.  This is *deprecated*, and
+metadata from storage as necessary.  This is *deprecated*, and
 should not be used.  It will be removed before 1.0.
 
 

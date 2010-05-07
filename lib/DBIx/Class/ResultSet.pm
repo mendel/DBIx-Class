@@ -2809,17 +2809,6 @@ sub _resolved_attrs {
       @cols = @{ delete $attrs->{columns}}
     } elsif ( defined $attrs->{columns} ) {
       @cols = delete $attrs->{columns}
-    } elsif ( defined $attrs->{'remove-columns'}) {
-      for ($source->columns) {
-        # cribbed from http://www.stonehenge.com/merlyn/UnixReview/col11.html
-        # Set subtraction
-        my %temp = ();
-        @temp{$source->columns} = ();
-        foreach (@{ $attrs->{'remove-columns'} }) {
-           delete $temp{$_};
-        }
-        @cols = keys %temp;
-      }
     } else {
       @cols = $source->columns
     }
@@ -2839,6 +2828,18 @@ sub _resolved_attrs {
     }
   }
 
+  if ( defined $attrs->{'remove-columns'}) {
+     for ($attrs->{columns}) {
+        # cribbed from http://www.stonehenge.com/merlyn/UnixReview/col11.html
+        # Set subtraction
+        my %temp = ();
+        @temp{$source->columns} = ();
+        foreach (@{ $attrs->{'remove-columns'} }) {
+           delete $temp{$_};
+        }
+        @cols = keys %temp;
+     }
+  }
   # add the additional columns on
   foreach (qw{include_columns +columns}) {
     if ( $attrs->{$_} ) {

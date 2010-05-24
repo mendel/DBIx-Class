@@ -4,9 +4,9 @@ package    # hide from PAUSE
 
 use strict;
 use warnings;
-use parent qw(DBIx::Class::Core);
+use base qw(DBIx::Class::Core);
 
-__PACKAGE__->table('bar');
+__PACKAGE__->table('baz');
 
 __PACKAGE__->add_columns( id => { data_type => 'integer' } );
 

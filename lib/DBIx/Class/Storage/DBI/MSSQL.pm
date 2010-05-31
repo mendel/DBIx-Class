@@ -5,6 +5,7 @@ use warnings;
 
 use base qw/DBIx::Class::Storage::DBI::UniqueIdentifier/;
 use mro 'c3';
+use Try::Tiny;
 
 use List::Util();
 
@@ -23,13 +24,13 @@ sub _set_identity_insert {
   );
 
   my $dbh = $self->_get_dbh;
-  eval { $dbh->do ($sql) };
-  if ($@) {
+  try { $dbh->do ($sql) }
+  catch {
     $self->throw_exception (sprintf "Error executing '%s': %s",
       $sql,
       $dbh->errstr,
     );
-  }
+  };
 }
 
 sub _unset_identity_insert {
@@ -128,7 +129,7 @@ sub _execute {
 
     # this should bring back the result of SELECT SCOPE_IDENTITY() we tacked
     # on in _prep_for_execute above
-    my ($identity) = eval { $sth->fetchrow_array };
+    my ($identity) = try { $sth->fetchrow_array };
 
     # SCOPE_IDENTITY failed, but we can do something else
     if ( (! $identity) && $self->_identity_method) {
@@ -158,7 +159,11 @@ sub _select_args_to_query {
 
   # see if this is an ordered subquery
   my $attrs = $_[3];
-  if ( scalar $self->_parse_order_by ($attrs->{order_by}) ) {
+  if (
+    $sql !~ /^ \s* SELECT \s+ TOP \s+ \d+ \s+ /xi
+      &&
+    scalar $self->_parse_order_by ($attrs->{order_by}) 
+  ) {
     $self->throw_exception(
       'An ordered subselect encountered - this is not safe! Please see "Ordered Subselects" in DBIx::Class::Storage::DBI::MSSQL
     ') unless $attrs->{unsafe_subselect_ok};
@@ -201,11 +206,24 @@ sub sql_maker {
 
   unless ($self->_sql_maker) {
     unless ($self->{_sql_maker_opts}{limit_dialect}) {
+      my $have_rno = 0;
 
-      my $version = $self->_server_info->{normalized_dbms_version} || 0;
+      if (exists $self->_server_info->{normalized_dbms_version}) {
+        $have_rno = 1 if $self->_server_info->{normalized_dbms_version} >= 9;
+      }
+      else {
+        # User is connecting via DBD::Sybase and has no permission to run
+        # stored procedures like xp_msver, or version detection failed for some
+        # other reason.
+        # So, we use a query to check if RNO is implemented.
+        try {
+          $self->_get_dbh->selectrow_array('SELECT row_number() OVER (ORDER BY rand())');
+          $have_rno = 1;
+        };
+      }
 
       $self->{_sql_maker_opts} = {
-        limit_dialect => ($version >= 9 ? 'RowNumberOver' : 'Top'),
+        limit_dialect => ($have_rno ? 'RowNumberOver' : 'Top'),
         %{$self->{_sql_maker_opts}||{}}
       };
     }
@@ -224,11 +242,12 @@ sub _ping {
   local $dbh->{RaiseError} = 1;
   local $dbh->{PrintError} = 0;
 
-  eval {
+  return try {
     $dbh->do('select 1');
+    1;
+  } catch {
+    0;
   };
-
-  return $@ ? 0 : 1;
 }
 
 package # hide from PAUSE

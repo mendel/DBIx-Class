@@ -16,6 +16,7 @@ use MooseX::Types::Moose qw/ClassName HashRef Object/;
 use Scalar::Util 'reftype';
 use Hash::Merge;
 use List::Util qw/min max reduce/;
+use Try::Tiny;
 
 use namespace::clean -except => 'meta';
 
@@ -308,7 +309,6 @@ has 'write_handler' => (
     is_datatype_numeric
     _supports_insert_returning
     _count_select
-    _subq_count_select
     _subq_update_delete
     svp_rollback
     svp_begin
@@ -343,7 +343,6 @@ has 'write_handler' => (
     _dbh_commit
     _execute_array
     _placeholders_supported
-    _verify_pid
     savepoints
     _sqlt_minimum_version
     _sql_maker_opts
@@ -371,6 +370,18 @@ has 'write_handler' => (
   /],
 );
 
+my @unimplemented = qw(
+  _arm_global_destructor
+  _preserve_foreign_dbh
+  _verify_pid
+  _verify_tid
+);
+
+for my $method (@unimplemented) {
+  __PACKAGE__->meta->add_method($method, sub {
+    croak "$method must not be called on ".(blessed shift).' objects';
+  });
+}
 
 has _master_connect_info_opts =>
   (is => 'rw', isa => HashRef, default => sub { {} });
@@ -640,7 +651,7 @@ sub execute_reliably {
   my @result;
   my $want_array = wantarray;
 
-  eval {
+  try {
     if($want_array) {
       @result = $coderef->(@args);
     } elsif(defined $want_array) {
@@ -648,19 +659,14 @@ sub execute_reliably {
     } else {
       $coderef->(@args);
     }
+  } catch {
+    $self->throw_exception("coderef returned an error: $_");
+  } finally {
+    ##Reset to the original state
+    $self->read_handler($current);
   };
 
-  ##Reset to the original state
-  $self->read_handler($current);
-
-  ##Exception testing has to come last, otherwise you might leave the 
-  ##read_handler set to master.
-
-  if($@) {
-    $self->throw_exception("coderef returned an error: $@");
-  } else {
-    return $want_array ? @result : $result[0];
-  }
+  return $want_array ? @result : $result[0];
 }
 
 =head2 set_reliable_storage

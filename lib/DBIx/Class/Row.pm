@@ -7,6 +7,7 @@ use base qw/DBIx::Class/;
 
 use DBIx::Class::Exception;
 use Scalar::Util ();
+use Try::Tiny;
 
 ###
 ### Internal method
@@ -314,7 +315,7 @@ sub insert {
 
       MULTICREATE_DEBUG and warn "MC $self pre-reconstructing $relname $rel_obj\n";
 
-      my $them = { %{$rel_obj->{_relationship_data} || {} }, $rel_obj->get_inflated_columns };
+      my $them = { %{$rel_obj->{_relationship_data} || {} }, $rel_obj->get_columns };
       my $existing;
 
       # if there are no keys - nothing to search for
@@ -404,18 +405,13 @@ sub insert {
       my $reverse = $source->reverse_relationship_info($relname);
       foreach my $obj (@cands) {
         $obj->set_from_related($_, $self) for keys %$reverse;
-        my $them = { %{$obj->{_relationship_data} || {} }, $obj->get_inflated_columns };
         if ($self->__their_pk_needs_us($relname)) {
           if (exists $self->{_ignore_at_insert}{$relname}) {
             MULTICREATE_DEBUG and warn "MC $self skipping post-insert on $relname";
-          } else {
-            MULTICREATE_DEBUG and warn "MC $self re-creating $relname $obj";
-            my $re = $self->result_source
-                          ->related_source($relname)
-                          ->resultset
-                          ->create($them);
-            %{$obj} = %{$re};
-            MULTICREATE_DEBUG and warn "MC $self new $relname $obj";
+          }
+          else {
+            MULTICREATE_DEBUG and warn "MC $self inserting $relname $obj";
+            $obj->insert;
           }
         } else {
           MULTICREATE_DEBUG and warn "MC $self post-inserting $obj";
@@ -518,16 +514,18 @@ this method.
 
 sub update {
   my ($self, $upd) = @_;
-  $self->throw_exception( "Not in database" ) unless $self->in_storage;
 
   my $ident_cond = $self->{_orig_ident} || $self->ident_condition;
-
-  $self->throw_exception('Unable to update a row with incomplete or no identity')
-    if ! keys %$ident_cond;
 
   $self->set_inflated_columns($upd) if $upd;
   my %to_update = $self->get_dirty_columns;
   return $self unless keys %to_update;
+
+  $self->throw_exception( "Not in database" ) unless $self->in_storage;
+
+  $self->throw_exception('Unable to update a row with incomplete or no identity')
+    if ! keys %$ident_cond;
+
   my $rows = $self->result_source->storage->update(
     $self->result_source, \%to_update, $ident_cond
   );
@@ -860,40 +858,46 @@ sub set_column {
   my ($self, $column, $new_value) = @_;
 
   # if we can't get an ident condition on first try - mark the object as unidentifiable
-  $self->{_orig_ident} ||= (eval { $self->ident_condition }) || {};
+  $self->{_orig_ident} ||= (try { $self->ident_condition }) || {};
 
   my $old_value = $self->get_column($column);
   $new_value = $self->store_column($column, $new_value);
 
-  my $dirty;
-  if (!$self->in_storage) { # no point tracking dirtyness on uninserted data
-    $dirty = 1;
-  }
-  elsif (defined $old_value xor defined $new_value) {
-    $dirty = 1;
-  }
-  elsif (not defined $old_value) {  # both undef
-    $dirty = 0;
-  }
-  elsif ($old_value eq $new_value) {
-    $dirty = 0;
-  }
-  else {  # do a numeric comparison if datatype allows it
-    if ($self->_is_column_numeric($column)) {
-      $dirty = $old_value != $new_value;
-    }
-    else {
-      $dirty = 1;
-    }
-  }
+  my $dirty =
+    $self->{_dirty_columns}{$column}
+      ||
+    $self->in_storage # no point tracking dirtyness on uninserted data
+      ? ! $self->_eq_column_values ($column, $old_value, $new_value)
+      : 1
+  ;
 
-  # sadly the update code just checks for keys, not for their value
+  # FIXME sadly the update code just checks for keys, not for their value
   $self->{_dirty_columns}{$column} = 1 if $dirty;
 
   # XXX clear out the relation cache for this column
   delete $self->{related_resultsets}{$column};
 
   return $new_value;
+}
+
+sub _eq_column_values {
+  my ($self, $col, $old, $new) = @_;
+
+  if (defined $old xor defined $new) {
+    return 0;
+  }
+  elsif (not defined $old) {  # both undef
+    return 1;
+  }
+  elsif ($old eq $new) {
+    return 1;
+  }
+  elsif ($self->_is_column_numeric($col)) {  # do a numeric comparison if datatype allows it
+    return $old == $new;
+  }
+  else {
+    return 0;
+  }
 }
 
 =head2 set_columns
@@ -1375,7 +1379,6 @@ second argument to $resultset->search($cond, $attrs);
 
 sub discard_changes {
   my ($self, $attrs) = @_;
-  delete $self->{_dirty_columns};
   return unless $self->in_storage; # Don't reload if we aren't real!
 
   # add a replication default to read from the master only

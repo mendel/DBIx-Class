@@ -172,6 +172,47 @@ SQL
 
   is $rs->first, undef, 'rolled back';
   $rs->reset;
+
+  # test RNO detection when version detection fails
+  SKIP: {
+    my $storage = $schema->storage;
+    my $version = $storage->_server_info->{normalized_dbms_version};
+    
+    skip 1, 'could not detect SQL Server version' if not defined $version;
+
+    my $have_rno = $version >= 9 ? 1 : 0;
+
+    # Delete version information to force RNO check when rebuilding SQLA
+    # instance.
+    no strict 'refs';
+    no warnings 'redefine';
+    local *{(ref $storage).'::_get_server_version'} = sub { undef };
+
+    my $server_info = { %{ $storage->_server_info_hash } }; # clone
+
+    delete @$server_info{qw/dbms_version normalized_dbms_version/};
+
+    local $storage->{_server_info_hash} = $server_info;
+    local $storage->{_sql_maker}        = undef;
+    local $storage->{_sql_maker_opts}   = undef;
+
+    $storage->sql_maker;
+
+    my $rno_detected =
+      ($storage->{_sql_maker_opts}{limit_dialect} eq 'RowNumberOver') ? 1 : 0;
+
+    ok (($have_rno == $rno_detected),
+      'row_number() over support detected correctly');
+  }
+
+  {
+    my $schema = DBICTest::Schema->clone;
+    $schema->connection($dsn, $user, $pass);
+
+    like $schema->storage->sql_maker->{limit_dialect},
+      qr/^(?:Top|RowNumberOver)\z/,
+      'sql_maker is correct on unconnected schema';
+  }
 }
 
 # test op-induced autoconnect

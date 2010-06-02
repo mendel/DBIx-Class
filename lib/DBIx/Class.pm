@@ -42,8 +42,11 @@ sub MODIFY_CODE_ATTRIBUTES {
 sub _attr_cache {
   my $self = shift;
   my $cache = $self->can('__attr_cache') ? $self->__attr_cache : {};
-  my $rest = eval { $self->next::method };
-  return $@ ? $cache : { %$cache, %$rest };
+
+  return {
+    %$cache,
+    %{ $self->maybe::next::method || {} },
+  };
 }
 
 1;
@@ -222,6 +225,8 @@ abraxxa: Alexander Hartmaier <abraxxa@cpan.org>
 
 aherzog: Adam Herzog <adam@herzogdesigns.com>
 
+Alexander Keusch <cpan@keusch.at>
+
 amoore: Andrew Moore <amoore@cpan.org>
 
 andyg: Andy Grundman <andy@hybridized.org>
@@ -340,6 +345,8 @@ quicksilver: Jules Bean
 
 rafl: Florian Ragwitz <rafl@debian.org>
 
+rbo: Robert Bohne <rbo@cpan.org>
+
 rbuels: Robert Buels <rmb32@cornell.edu>
 
 rdj: Ryan D Johnson <ryan@innerfence.com>
@@ -369,6 +376,8 @@ teejay : Aaron Trevena <teejay@cpan.org>
 Todd Lipcon
 
 Tom Hukins
+
+tonvoon: Ton Voon <tonvoon@cpan.org>
 
 triode: Pete Gamache <gamache@cpan.org>
 

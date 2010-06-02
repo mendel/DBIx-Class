@@ -136,7 +136,7 @@ EOW
         my ($cond_should_join, $cond_optimized) = $rel_source->_resolve_condition
           ($cond, $obj, $f_rel);
         if ($cond_optimized) {
-          $link_cond = $cond_resolved;
+          $link_cond = $cond_optimized;
         } else {
           $self->throw_exception('Extended relationship '.$rel.
                                  ' requires optimized version for ManyToMany.');

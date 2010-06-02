@@ -1365,12 +1365,7 @@ sub _resolve_condition {
       $self->throw_exception ('Unable to determine relationship name for condition resolution');
     }
 
-    $cond = $cond->(
-      $for,
-      ref $for ? 'me' : $as,
-      $self,
-      $rel,
-    );
+    return $cond->($for, ref $for ? 'me' : $as, $self, $rel, ref $for ? $for : undef);
 
   } elsif (ref $cond eq 'HASH') {
     my %ret;

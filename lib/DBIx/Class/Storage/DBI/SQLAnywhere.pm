@@ -2,9 +2,11 @@ package DBIx::Class::Storage::DBI::SQLAnywhere;
 
 use strict;
 use warnings;
-use base qw/DBIx::Class::Storage::DBI/;
+use base qw/DBIx::Class::Storage::DBI::UniqueIdentifier/;
 use mro 'c3';
-use List::Util ();
+use List::Util 'first';
+use Try::Tiny;
+use namespace::clean;
 
 __PACKAGE__->mk_group_accessors(simple => qw/
   _identity
@@ -35,18 +37,21 @@ Recommended L<connect_info|DBIx::Class::Storage::DBI/connect_info> settings:
 
 sub last_insert_id { shift->_identity }
 
+sub _new_uuid { 'UUIDTOSTR(NEWID())' }
+
 sub insert {
   my $self = shift;
   my ($source, $to_insert) = @_;
 
-  my $identity_col = List::Util::first {
-      $source->column_info($_)->{is_auto_increment} 
-  } $source->columns;
+  my $identity_col =
+    first { $source->column_info($_)->{is_auto_increment} } $source->columns;
 
 # user might have an identity PK without is_auto_increment
   if (not $identity_col) {
     foreach my $pk_col ($source->primary_columns) {
-      if (not exists $to_insert->{$pk_col}) {
+      if (not exists $to_insert->{$pk_col} &&
+          $source->column_info($pk_col)->{data_type} !~ /^uniqueidentifier/i)
+      {
         $identity_col = $pk_col;
         last;
       }
@@ -58,11 +63,36 @@ sub insert {
     my $table_name = $source->from;
     $table_name    = $$table_name if ref $table_name;
 
-    my ($identity) = $dbh->selectrow_array("SELECT GET_IDENTITY('$table_name')");
+    my ($identity) = try {
+      $dbh->selectrow_array("SELECT GET_IDENTITY('$table_name')")
+    };
 
-    $to_insert->{$identity_col} = $identity;
+    if (defined $identity) {
+      $to_insert->{$identity_col} = $identity;
+      $self->_identity($identity);
+    }
+  }
 
-    $self->_identity($identity);
+  return $self->next::method(@_);
+}
+
+# convert UUIDs to strings in selects
+sub _select_args {
+  my $self = shift;
+  my ($ident, $select) = @_;
+
+  my $col_info = $self->_resolve_column_info($ident);
+
+  for my $select_idx (0..$#$select) {
+    my $selected = $select->[$select_idx];
+
+    next if ref $selected;
+
+    my $data_type = $col_info->{$selected}{data_type};
+
+    if ($data_type && lc($data_type) eq 'uniqueidentifier') {
+      $select->[$select_idx] = { UUIDTOSTR => $selected };
+    }
   }
 
   return $self->next::method(@_);
@@ -85,8 +115,13 @@ sub _sql_maker_opts {
 sub build_datetime_parser {
   my $self = shift;
   my $type = "DateTime::Format::Strptime";
-  eval "use ${type}";
-  $self->throw_exception("Couldn't load ${type}: $@") if $@;
+  try {
+    eval "require ${type}"
+  }
+  catch {
+    $self->throw_exception("Couldn't load ${type}: $_");
+  };
+
   return $type->new( pattern => '%Y-%m-%d %H:%M:%S.%6N' );
 }
 

@@ -51,6 +51,23 @@ sub sqlt_type {
   return 'MySQL';
 }
 
+sub deployment_statements {
+  my $self = shift;
+  my ($schema, $type, $version, $dir, $sqltargs, @rest) = @_;
+
+  $sqltargs ||= {};
+
+  if (
+    ! exists $sqltargs->{producer_args}{mysql_version}
+      and 
+    my $dver = $self->_server_info->{normalized_dbms_version}
+  ) {
+    $sqltargs->{producer_args}{mysql_version} = $dver;
+  }
+
+  $self->next::method($schema, $type, $version, $dir, $sqltargs, @rest);
+}
+
 sub _svp_begin {
     my ($self, $name) = @_;
 
@@ -99,7 +116,12 @@ C<$storage> object into this class.
 
 =head1 DESCRIPTION
 
-This class implements MySQL specific bits of L<DBIx::Class::Storage::DBI>.
+This class implements MySQL specific bits of L<DBIx::Class::Storage::DBI>,
+like AutoIncrement column support and savepoints. Also it augments the
+SQL maker to support the MySQL-specific C<STRAIGHT_JOIN> join type, which
+you can use by specifying C<< join_type => 'straight' >> in the
+L<relationship attributes|DBIx::Class::Relationship::Base/join_type>
+
 
 It also provides a one-stop on-connect macro C<set_strict_mode> which sets
 session variables such that MySQL behaves more predictably as far as the

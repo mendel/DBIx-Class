@@ -4,9 +4,9 @@ use warnings;
 
 use base qw/DBIx::Class::Storage::DBI::MSSQL/;
 use mro 'c3';
-
-use List::Util();
-use Scalar::Util ();
+use Scalar::Util 'reftype';
+use Try::Tiny;
+use namespace::clean;
 
 __PACKAGE__->mk_group_accessors(simple => qw/
   _using_dynamic_cursors
@@ -37,7 +37,7 @@ Use as:
 
   on_connect_call => 'use_dynamic_cursors'
 
-in your L<DBIx::Class::Storage::DBI/connect_info> as one way to enable multiple
+in your L<connect_info|DBIx::Class::Storage::DBI/connect_info> as one way to enable multiple
 concurrent statements.
 
 Will add C<< odbc_cursortype => 2 >> to your DBI connection attributes. See
@@ -66,7 +66,7 @@ sub connect_call_use_dynamic_cursors {
 
   my $dbi_attrs = $self->_dbi_connect_info->[-1];
 
-  unless (ref($dbi_attrs) && Scalar::Util::reftype($dbi_attrs) eq 'HASH') {
+  unless (ref($dbi_attrs) && reftype $dbi_attrs eq 'HASH') {
     $dbi_attrs = {};
     push @{ $self->_dbi_connect_info }, $dbi_attrs;
   }
@@ -84,18 +84,17 @@ sub _set_dynamic_cursors {
   my $self = shift;
   my $dbh  = $self->_get_dbh;
 
-  eval {
+  try {
     local $dbh->{RaiseError} = 1;
     local $dbh->{PrintError} = 0;
     $dbh->do('SELECT @@IDENTITY');
-  };
-  if ($@) {
+  } catch {
     $self->throw_exception (<<'EOF');
 
 Your drivers do not seem to support dynamic cursors (odbc_cursortype => 2),
 if you're using FreeTDS, make sure to set tds_version to 8.0 or greater.
 EOF
-  }
+  };
 
   $self->_using_dynamic_cursors(1);
   $self->_identity_method('@@identity');
@@ -173,14 +172,6 @@ sub connect_call_use_MARS {
     $self->disconnect;
     $self->ensure_connected if $was_connected;
   }
-}
-
-sub _get_mssql_version {
-  my $self = shift;
-
-  my ($version) = $self->_get_dbh->get_info(18) =~ /^(\d+)/;
-
-  return $version;
 }
 
 1;

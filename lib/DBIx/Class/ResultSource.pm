@@ -8,6 +8,9 @@ use DBIx::Class::ResultSourceHandle;
 
 use DBIx::Class::Exception;
 use Carp::Clan qw/^DBIx::Class/;
+use Try::Tiny;
+use List::Util 'first';
+use namespace::clean;
 
 use base qw/DBIx::Class/;
 
@@ -142,7 +145,7 @@ by supplying an L</accessor> in the column_info hash.
 If a column name beginning with a plus sign ('+col1') is provided, the
 attributes provided will be merged with any existing attributes for the
 column, with the new attributes taking precedence in the case that an
-attribute already exists. Using this without a hashref 
+attribute already exists. Using this without a hashref
 (C<< $source->add_columns(qw/+col1 +col2/) >>) is legal, but useless --
 it does the same thing it would do without the plus.
 
@@ -174,7 +177,7 @@ the name of the column will be used.
 
 This contains the column type. It is automatically filled if you use the
 L<SQL::Translator::Producer::DBIx::Class::File> producer, or the
-L<DBIx::Class::Schema::Loader> module. 
+L<DBIx::Class::Schema::Loader> module.
 
 Currently there is no standard set of values for the data_type. Use
 whatever your database supports.
@@ -367,9 +370,10 @@ sub column_info {
     $self->{_columns_info_loaded}++;
     my $info = {};
     my $lc_info = {};
-    # eval for the case of storage without table
-    eval { $info = $self->storage->columns_info_for( $self->from ) };
-    unless ($@) {
+
+    # try for the case of storage without table
+    try {
+      $info = $self->storage->columns_info_for( $self->from );
       for my $realcol ( keys %{$info} ) {
         $lc_info->{lc $realcol} = $info->{$realcol};
       }
@@ -379,7 +383,7 @@ sub column_info {
           %{ $info->{$col} || $lc_info->{lc $col} || {} }
         };
       }
-    }
+    };
   }
   return $self->_columns->{$column};
 }
@@ -519,12 +523,15 @@ sub primary_columns {
   return @{shift->_primaries||[]};
 }
 
+# a helper method that will automatically die with a descriptive message if
+# no pk is defined on the source in question. For internal use to save
+# on if @pks... boilerplate
 sub _pri_cols {
   my $self = shift;
   my @pcols = $self->primary_columns
     or $self->throw_exception (sprintf(
-      'Operation requires a primary key to be declared on %s via set_primary_key',
-      ref $self,
+      "Operation requires a primary key to be declared on '%s' via set_primary_key",
+      $self->source_name,
     ));
   return @pcols;
 }
@@ -894,7 +901,7 @@ clause contents.
 
   my $schema = $source->schema();
 
-Returns the L<DBIx::Class::Schema> object that this result source 
+Returns the L<DBIx::Class::Schema> object that this result source
 belongs to.
 
 =head2 storage
@@ -1019,7 +1026,7 @@ sub add_relationship {
 
   return $self;
 
-  # XXX disabled. doesn't work properly currently. skip in tests.
+# XXX disabled. doesn't work properly currently. skip in tests.
 
   my $f_source = $self->schema->source($f_source_name);
   unless ($f_source) {
@@ -1032,13 +1039,14 @@ sub add_relationship {
   }
   return unless $f_source; # Can't test rel without f_source
 
-  eval { $self->_resolve_join($rel, 'me', {}, []) };
-
-  if ($@) { # If the resolve failed, back out and re-throw the error
-    delete $rels{$rel}; #
+  try { $self->_resolve_join($rel, 'me', {}, []) }
+  catch {
+    # If the resolve failed, back out and re-throw the error
+    delete $rels{$rel};
     $self->_relationships(\%rels);
-    $self->throw_exception("Error creating relationship $rel: $@");
-  }
+    $self->throw_exception("Error creating relationship $rel: $_");
+  };
+
   1;
 }
 
@@ -1242,7 +1250,7 @@ sub _resolve_join {
     for my $rel (keys %$join) {
 
       my $rel_info = $self->relationship_info($rel)
-        or $self->throw_exception("No such relationship ${rel}");
+        or $self->throw_exception("No such relationship '$rel' on " . $self->source_name);
 
       my $force_left = $parent_force_left;
       $force_left ||= lc($rel_info->{attrs}{join_type}||'') eq 'left';
@@ -1272,7 +1280,7 @@ sub _resolve_join {
     );
 
     my $rel_info = $self->relationship_info($join)
-      or $self->throw_exception("No such relationship ${join}");
+      or $self->throw_exception("No such relationship $join on " . $self->source_name);
 
     my $rel_src = $self->related_source($join);
     return [ { $as => $rel_src->from,
@@ -1285,7 +1293,7 @@ sub _resolve_join {
                -is_single => (
                   $rel_info->{attrs}{accessor}
                     &&
-                  List::Util::first { $rel_info->{attrs}{accessor} eq $_ } (qw/single filter/)
+                  first { $rel_info->{attrs}{accessor} eq $_ } (qw/single filter/)
                 ),
                -alias => $as,
                -relation_chain_depth => $seen->{-relation_chain_depth} || 0,
@@ -1458,7 +1466,7 @@ sub _resolve_prefetch {
     my $as = shift @{$p->{-join_aliases}};
 
     my $rel_info = $self->relationship_info( $pre );
-    $self->throw_exception( $self->name . " has no such relationship '$pre'" )
+    $self->throw_exception( $self->source_name . " has no such relationship '$pre'" )
       unless $rel_info;
     my $as_prefix = ($alias =~ /^.*?\.(.+)$/ ? $1.'.' : '');
     my $rel_source = $self->related_source($pre);
@@ -1483,14 +1491,14 @@ sub _resolve_prefetch {
       }
       #my @col = map { (/^self\.(.+)$/ ? ("${as_prefix}.$1") : ()); }
       #              values %{$rel_info->{cond}};
-      $collapse->{".${as_prefix}${pre}"} = [ $rel_source->primary_columns ];
+      $collapse->{".${as_prefix}${pre}"} = [ $rel_source->_pri_cols ];
         # action at a distance. prepending the '.' allows simpler code
         # in ResultSet->_collapse_result
       my @key = map { (/^foreign\.(.+)$/ ? ($1) : ()); }
                     keys %{$rel_info->{cond}};
       my @ord = (ref($rel_info->{attrs}{order_by}) eq 'ARRAY'
                    ? @{$rel_info->{attrs}{order_by}}
-   
+
                 : (defined $rel_info->{attrs}{order_by}
                        ? ($rel_info->{attrs}{order_by})
                        : ()));
@@ -1519,7 +1527,7 @@ Returns the result source object for the given relationship.
 sub related_source {
   my ($self, $rel) = @_;
   if( !$self->has_relationship( $rel ) ) {
-    $self->throw_exception("No such relationship '$rel'");
+    $self->throw_exception("No such relationship '$rel' on " . $self->source_name);
   }
   return $self->schema->source($self->relationship_info($rel)->{source});
 }
@@ -1541,14 +1549,14 @@ Returns the class name for objects in the given relationship.
 sub related_class {
   my ($self, $rel) = @_;
   if( !$self->has_relationship( $rel ) ) {
-    $self->throw_exception("No such relationship '$rel'");
+    $self->throw_exception("No such relationship '$rel' on " . $self->source_name);
   }
   return $self->schema->class($self->relationship_info($rel)->{source});
 }
 
 =head2 handle
 
-Obtain a new handle to this source. Returns an instance of a 
+Obtain a new handle to this source. Returns an instance of a
 L<DBIx::Class::ResultSourceHandle>.
 
 =cut

@@ -7,8 +7,6 @@ use lib qw(t/lib);
 use DBICTest;
 use Scope::Guard ();
 
-# XXX we're only testing TIMESTAMP here
-
 my ($dsn, $user, $pass)    = @ENV{map { "DBICTEST_FIREBIRD_${_}" }      qw/DSN USER PASS/};
 my ($dsn2, $user2, $pass2) = @ENV{map { "DBICTEST_FIREBIRD_ODBC_${_}" } qw/DSN USER PASS/};
 

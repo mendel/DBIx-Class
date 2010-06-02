@@ -49,7 +49,7 @@ __PACKAGE__->has_many(
       my ( $me_alias, $rel_alias, $me_result_source, $rel_name, $optional_me_object ) = @_;
       return
         ({ "${rel_alias}.artist"  => { '=' => \"${me_alias}.artistid"},
-           "${rel_aliase}.year"   => { '>', "1979",
+           "${rel_alias}.year"    => { '>', "1979",
                                        '<', "1990" }
          },
          $optional_me_object &&

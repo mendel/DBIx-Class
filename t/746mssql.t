@@ -13,6 +13,7 @@ plan skip_all => 'Set $ENV{DBICTEST_MSSQL_ODBC_DSN}, _USER and _PASS to run this
   unless ($dsn && $user);
 
 DBICTest::Schema->load_classes('ArtistGUID');
+DBICTest::Schema->load_classes('WeirdColumn');
 my $schema = DBICTest::Schema->connect($dsn, $user, $pass);
 
 {

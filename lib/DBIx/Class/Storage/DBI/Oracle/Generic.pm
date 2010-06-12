@@ -151,7 +151,7 @@ sub _dbh_get_autoinc_seq {
     next unless $seq_name;
 
     if ($seq_name !~ /\./) {
-      $seq_name = join '.' => map $self->sql_maker->_quote($_), $schema, $seq_name;
+      $seq_name = join '.' => $schema, $seq_name;
     }
 
     return $seq_name;

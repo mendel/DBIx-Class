@@ -33,6 +33,137 @@ BEGIN {
   }
 }
 
+{ package SQL::Abstract::Limit;
+  no warnings 'redefine';
+  sub select {
+    my $self   = shift;
+    my ($table, @bind) = $self->_table_with_bind(shift);
+    my $fields = shift;
+    my $where  = shift; #  if ref( $_[0] ) eq 'HASH';
+
+    my ( $order, $rows, $offset, $syntax ) = $self->_get_args( @_ );
+
+    $fields ||= '*';    # in case someone supplies '' or undef
+
+    # with no LIMIT parameters, defer to SQL::Abstract [ don't know why the first way fails ]
+    # return $self->SUPER::select( $table, $fields, $where, $order ) unless $rows;
+    return SQL::Abstract->new->select( $table, $fields, $where, $order ) unless $rows;
+
+    # with LIMIT parameters, get the basic SQL without the ORDER BY clause
+    my ( $sql, @more_bind ) = $self->SUPER::select( $table, $fields, $where );
+    push @bind, @more_bind;
+
+    my $syntax_name = $self->_find_syntax( $syntax );
+
+    $sql = $self->_emulate_limit( $syntax_name, $sql, $order, $rows, $offset );
+
+    return wantarray ? ( $sql, @bind ) : $sql;
+  }
+};
+
+{ package SQL::Abstract;
+  no warnings 'redefine';
+  sub select {
+    my $self   = shift;
+    my ($table, @bind) = $self->_table_with_bind(shift);
+    my $fields = shift || '*';
+    my $where  = shift;
+    my $order  = shift;
+
+    my($where_sql, @more_bind) = $self->where($where, $order);
+    push @bind, @more_bind;
+
+    my $f = (ref $fields eq 'ARRAY') ? join ', ', map { $self->_quote($_) } @$fields
+      : $fields;
+    my $sql = join(' ', $self->_sqlcase('select'), $f,
+                   $self->_sqlcase('from'),   $table)
+      . $where_sql;
+
+    return wantarray ? ($sql, @bind) : $sql;
+  }
+
+  sub _table_with_bind {
+    my ($self, $from) = @_;
+    if (ref $from eq 'ARRAY') {
+      return $self->_recurse_from_with_bind(@$from);
+    } elsif (ref $from eq 'HASH') {
+      return $self->_make_as($from);
+    } else {
+      return $from; # would love to quote here but _table ends up getting called
+      # twice during an ->select without a limit clause due to
+      # the way S::A::Limit->select works. should maybe consider
+      # bypassing this and doing S::A::select($self, ...) in
+      # our select method above. meantime, quoting shims have
+      # been added to select/insert/update/delete here
+    }
+  }
+
+  sub _recurse_from_with_bind {
+    my ($self, $from, @join) = @_;
+    my @sqlf;
+    my @binds;
+    push(@sqlf, $self->_make_as($from));
+    foreach my $j (@join) {
+      my ($to, $on) = @$j;
+
+      # check whether a join type exists
+      my $to_jt = ref($to) eq 'ARRAY' ? $to->[0] : $to;
+      my $join_type;
+      if (ref($to_jt) eq 'HASH' and defined($to_jt->{-join_type})) {
+        $join_type = $to_jt->{-join_type};
+        $join_type =~ s/^\s+ | \s+$//xg;
+      }
+
+      $join_type = $self->{_default_jointype} if not defined $join_type;
+
+      push @sqlf, $self->_generate_join_clause( $join_type );
+
+      if (ref $to eq 'ARRAY') {
+        my ($sql, @local_bind) = $self->_recurse_from_with_bind(@$to);
+        push(@sqlf, '(', $sql, ')');
+        push(@binds, @local_bind);
+      } else {
+        push(@sqlf, $self->_make_as($to));
+      }
+      my ($sql, @local_binds) = $self->_join_condition_with_bind($on);
+      push(@sqlf, ' ON ', $sql);
+      push(@binds, @local_binds);
+    }
+    return join('', @sqlf), @binds;
+  }
+
+  sub _join_condition_with_bind {
+    my ($self, $cond) = @_;
+    if (ref $cond eq 'HASH') {
+      my %j;
+      for (keys %$cond) {
+        my $v = $cond->{$_};
+        if (ref $v) {
+          #croak (ref($v) . qq{ reference arguments are not supported in JOINS - try using \"..." instead'})
+          #    if ref($v) ne 'SCALAR';
+          $j{$_} = $v;
+        }
+        else {
+          my $x = '= '.$self->_quote($v); $j{$_} = \$x;
+        }
+      };
+      return $self->_recurse_where(\%j);
+    } elsif (ref $cond eq 'ARRAY') {
+      my @binds;
+      my @parts;
+      foreach my $c (@$cond) {
+        my ($sql, @bind) = $self->_join_condition_with_bind($c);
+        push @binds, @bind;
+        push @parts, $sql;
+      }
+      return join(' OR ', @parts), @binds;
+    } else {
+      die "Can't handle this yet!";
+    }
+  }
+
+};
+
 # the "oh noes offset/top without limit" constant
 # limited to 32 bits for sanity (and since it is fed
 # to sprintf %u)
@@ -718,18 +849,7 @@ sub _order_directions {
 
 sub _table {
   my ($self, $from) = @_;
-  if (ref $from eq 'ARRAY') {
-    return $self->_recurse_from(@$from);
-  } elsif (ref $from eq 'HASH') {
-    return $self->_make_as($from);
-  } else {
-    return $from; # would love to quote here but _table ends up getting called
-                  # twice during an ->select without a limit clause due to
-                  # the way S::A::Limit->select works. should maybe consider
-                  # bypassing this and doing S::A::select($self, ...) in
-                  # our select method above. meantime, quoting shims have
-                  # been added to select/insert/update/delete here
-  }
+  return ($self->_table_with_bind($from))[0];
 }
 
 sub _generate_join_clause {
@@ -742,32 +862,7 @@ sub _generate_join_clause {
 
 sub _recurse_from {
   my ($self, $from, @join) = @_;
-  my @sqlf;
-  push(@sqlf, $self->_make_as($from));
-  foreach my $j (@join) {
-    my ($to, $on) = @$j;
-
-
-    # check whether a join type exists
-    my $to_jt = ref($to) eq 'ARRAY' ? $to->[0] : $to;
-    my $join_type;
-    if (ref($to_jt) eq 'HASH' and defined($to_jt->{-join_type})) {
-      $join_type = $to_jt->{-join_type};
-      $join_type =~ s/^\s+ | \s+$//xg;
-    }
-
-    $join_type = $self->{_default_jointype} if not defined $join_type;
-
-    push @sqlf, $self->_generate_join_clause( $join_type );
-
-    if (ref $to eq 'ARRAY') {
-      push(@sqlf, '(', $self->_recurse_from(@$to), ')');
-    } else {
-      push(@sqlf, $self->_make_as($to));
-    }
-    push(@sqlf, ' ON ', $self->_join_condition($on));
-  }
-  return join('', @sqlf);
+  return ($self->_recurse_from_with_bind($from, @join))[0];
 }
 
 sub _fold_sqlbind {
@@ -798,25 +893,7 @@ sub _skip_options {
 
 sub _join_condition {
   my ($self, $cond) = @_;
-  if (ref $cond eq 'HASH') {
-    my %j;
-    for (keys %$cond) {
-      my $v = $cond->{$_};
-      if (ref $v) {
-        #croak (ref($v) . qq{ reference arguments are not supported in JOINS - try using \"..." instead'})
-        #    if ref($v) ne 'SCALAR';
-        $j{$_} = $v;
-      }
-      else {
-        my $x = '= '.$self->_quote($v); $j{$_} = \$x;
-      }
-    };
-    return scalar($self->_recurse_where(\%j));
-  } elsif (ref $cond eq 'ARRAY') {
-    return join(' OR ', map { $self->_join_condition($_) } @$cond);
-  } else {
-    die "Can't handle this yet!";
-  }
+  return ($self->_join_condition_with_bind)[0];
 }
 
 sub limit_dialect {

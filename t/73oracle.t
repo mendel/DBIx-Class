@@ -670,10 +670,7 @@ SKIP: {
   $schema1_dbh->do("GRANT INSERT ON artist TO $user2");
   $schema1_dbh->do("GRANT SELECT ON artist_seq TO $user2");
 
-  my $rs = $schema2->resultset('Artist');
-
-  # qualify table with schema
-  local $rs->result_source->{name} = "${user}.artist";
+  my $rs = $schema2->resultset('ArtistFQN');
 
   lives_and {
     my $row = $rs->create({ name => 'From Different Schema' });

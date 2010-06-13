@@ -672,10 +672,41 @@ SKIP: {
 
   my $rs = $schema2->resultset('ArtistFQN');
 
+  # first test with unquoted (default) sequence name in trigger body
+
   lives_and {
     my $row = $rs->create({ name => 'From Different Schema' });
     ok $row->artistid;
   } 'used autoinc sequence across schemas';
+
+  # now quote the sequence name
+
+  $schema1_dbh->do(qq{
+    CREATE OR REPLACE TRIGGER artist_insert_trg
+    BEFORE INSERT ON artist
+    FOR EACH ROW
+    BEGIN
+      IF :new.artistid IS NULL THEN
+        SELECT "ARTIST_SEQ".nextval
+        INTO :new.artistid
+        FROM DUAL;
+      END IF;
+    END;
+  });
+
+  # sequence is cached in the rsrc
+  delete $rs->result_source->column_info('artistid')->{sequence};
+
+  lives_and {
+    my $row = $rs->create({ name => 'From Different Schema With Quoted Sequence' });
+    ok $row->artistid;
+  } 'used quoted autoinc sequence across schemas';
+
+  my $schema_name = uc $user;
+
+  is $rs->result_source->column_info('artistid')->{sequence},
+    qq[${schema_name}."ARTIST_SEQ"],
+    'quoted sequence name correctly extracted';
 }
 
 done_testing;

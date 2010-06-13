@@ -377,7 +377,7 @@ if ( $schema->storage->isa('DBIx::Class::Storage::DBI::Oracle::Generic') ) {
     # use order siblings by statement
     SKIP: {
       # http://download.oracle.com/docs/cd/A87860_01/doc/server.817/a85397/state21b.htm#2066123
-      skip q{Oracle8i doesn't support ORDER SIBLINGS BY}, 2
+      skip q{Oracle8i doesn't support ORDER SIBLINGS BY}, 1
         if $schema->storage->_server_info->{normalized_dbms_version} < 9;
 
       my $rs = $schema->resultset('Artist')->search({}, {
@@ -434,7 +434,7 @@ if ( $schema->storage->isa('DBIx::Class::Storage::DBI::Oracle::Generic') ) {
     # combine a connect by with a join
     SKIP: {
       # http://download.oracle.com/docs/cd/A87860_01/doc/server.817/a85397/state21b.htm#2066123
-      skip q{Oracle8i doesn't support connect by with join}, 5
+      skip q{Oracle8i doesn't support connect by with join}, 1
         if $schema->storage->_server_info->{normalized_dbms_version} < 9;
 
       my $rs = $schema->resultset('Artist')->search(
@@ -515,7 +515,7 @@ if ( $schema->storage->isa('DBIx::Class::Storage::DBI::Oracle::Generic') ) {
 
     # limit a connect by
     SKIP: {
-      skip q{Oracle8i doesn't support order by in a subquery}, 4
+      skip q{Oracle8i doesn't support order by in a subquery}, 1
         if $schema->storage->_server_info->{normalized_dbms_version} < 9;
 
       my $rs = $schema->resultset('Artist')->search({}, {
@@ -628,7 +628,7 @@ if ( $schema->storage->isa('DBIx::Class::Storage::DBI::Oracle::Generic') ) {
     # select the whole cycle tree with nocylce
     SKIP: {
       # http://download.oracle.com/docs/cd/A87860_01/doc/server.817/a85397/expressi.htm#1023748
-      skip q{Oracle8i doesn't support connect by nocycle}, 5
+      skip q{Oracle8i doesn't support connect by nocycle}, 1
         if $schema->storage->_server_info->{normalized_dbms_version} < 9;
 
       my $rs = $schema->resultset('Artist')->search({}, {

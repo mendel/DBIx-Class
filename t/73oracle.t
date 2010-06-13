@@ -553,12 +553,6 @@ if ( $schema->storage->isa('DBIx::Class::Storage::DBI::Oracle::Generic') ) {
         'LIMIT a Connect By query - correct names'
       );
 
-      # TODO: 
-      # prints "START WITH name = ? 
-      # CONNECT BY artistid = PRIOR parentid "
-      # after count_subq, 
-      # I will fix this later...
-      # 
       is_same_sql_bind (
         $rs->count_rs->as_query,
         '( 

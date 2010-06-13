@@ -1,7 +1,7 @@
 package # Hide from PAUSE
   DBIx::Class::SQLAHacks::OracleJoins;
 
-use base qw( DBIx::Class::SQLAHacks );
+use base qw( DBIx::Class::SQLAHacks::Oracle );
 use Carp::Clan qw/^DBIx::Class|^SQL::Abstract/;
 
 sub select {

@@ -485,7 +485,6 @@ if ( $schema->storage->isa('DBIx::Class::Storage::DBI::Oracle::Generic') ) {
     # combine a connect by with order_by
     {
       my $rs = $schema->resultset('Artist')->search({}, {
-        select => ['me.name'],
         start_with => { name => 'root' },
         connect_by => { parentid => { -prior => \ 'artistid' } },
         order_by => { -asc => [ 'LEVEL', 'name' ] },
@@ -494,7 +493,7 @@ if ( $schema->storage->isa('DBIx::Class::Storage::DBI::Oracle::Generic') ) {
       is_same_sql_bind (
         $rs->as_query,
         '(
-          SELECT me.name 
+          SELECT me.artistid, me.name, me.rank, me.charfield, me.parentid
           FROM artist me
           START WITH name = ?
           CONNECT BY parentid = PRIOR artistid 
@@ -503,13 +502,24 @@ if ( $schema->storage->isa('DBIx::Class::Storage::DBI::Oracle::Generic') ) {
         [ [ name => 'root' ] ],
       );
 
+
       # Don't use "$rs->get_column ('name')->all" they build a query arround the $rs.
       #   If $rs has a order by, the order by is in the subquery and this doesn't work with Oracle 8i.
       is_deeply (
-        [ map { $_->[0] } $rs->cursor->all ],
+        [ map { $_->[1] } $rs->cursor->all ],
         [ qw/root child1 child2 grandchild greatgrandchild/ ],
-        'Connect By with a order_by - result name ok'
+        'Connect By with a order_by - result name ok (without get_column)'
       );
+
+      SKIP: {
+          skip q{Connect By with a order_by - result name ok (with get_column), Oracle8i doesn't support order by in a subquery},1
+            if $schema->storage->_server_info->{normalized_dbms_version} < 9;
+          is_deeply (
+            [  $rs->get_column ('name')->all ],
+            [ qw/root child1 child2 grandchild greatgrandchild/ ],
+            'Connect By with a order_by - result name ok (with get_column)'
+          );
+      }
     }
 
 

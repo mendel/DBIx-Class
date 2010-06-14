@@ -529,7 +529,7 @@ sub _find_syntax {
 
 sub _sqla_overriden_select {
   my $self   = shift;
-  my ($table, @bind) = $self->_table_with_bind(shift);
+  my ($table, @bind) = $self->_table(shift);
   my $fields = shift || '*';
   my $where  = shift;
   my $order  = shift;
@@ -759,10 +759,10 @@ sub _order_directions {
   ]);
 }
 
-sub _table_with_bind {
+sub _table {
   my ($self, $from) = @_;
   if (ref $from eq 'ARRAY') {
-    return $self->_recurse_from_with_bind(@$from);
+    return $self->_recurse_from(@$from);
   } elsif (ref $from eq 'HASH') {
     return $self->_make_as($from);
   } else {
@@ -775,11 +775,6 @@ sub _table_with_bind {
   }
 }
 
-sub _table {
-  my ($self, $from) = @_;
-  return ($self->_table_with_bind($from))[0];
-}
-
 sub _generate_join_clause {
     my ($self, $join_type) = @_;
 
@@ -788,7 +783,7 @@ sub _generate_join_clause {
     );
 }
 
-sub _recurse_from_with_bind {
+sub _recurse_from{
   my ($self, $from, @join) = @_;
   my @sqlf;
   my @binds;
@@ -809,22 +804,17 @@ sub _recurse_from_with_bind {
     push @sqlf, $self->_generate_join_clause( $join_type );
 
     if (ref $to eq 'ARRAY') {
-      my ($sql, @local_bind) = $self->_recurse_from_with_bind(@$to);
+      my ($sql, @local_bind) = $self->_recurse_from(@$to);
       push(@sqlf, '(', $sql, ')');
       push(@binds, @local_bind);
     } else {
       push(@sqlf, $self->_make_as($to));
     }
-    my ($sql, @local_binds) = $self->_join_condition_with_bind($on);
+    my ($sql, @local_binds) = $self->_join_condition($on);
     push(@sqlf, ' ON ', $sql);
     push(@binds, @local_binds);
   }
   return join('', @sqlf), @binds;
-}
-
-sub _recurse_from {
-  my ($self, $from, @join) = @_;
-  return ($self->_recurse_from_with_bind($from, @join))[0];
 }
 
 sub _fold_sqlbind {
@@ -853,7 +843,7 @@ sub _skip_options {
   return $clean_hash;
 }
 
-sub _join_condition_with_bind {
+sub _join_condition {
   my ($self, $cond) = @_;
   if (ref $cond eq 'HASH') {
     my %j;
@@ -873,7 +863,7 @@ sub _join_condition_with_bind {
     my @binds;
     my @parts;
     foreach my $c (@$cond) {
-      my ($sql, @bind) = $self->_join_condition_with_bind($c);
+      my ($sql, @bind) = $self->_join_condition($c);
       push @binds, @bind;
       push @parts, $sql;
     }
@@ -881,11 +871,6 @@ sub _join_condition_with_bind {
   } else {
     die "Can't handle this yet!";
   }
-}
-
-sub _join_condition {
-  my ($self, $cond) = @_;
-  return ($self->_join_condition_with_bind)[0];
 }
 
 sub limit_dialect {

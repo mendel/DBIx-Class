@@ -129,14 +129,20 @@ database-based view.
 An SQL query for your view. Will not be translated across database
 syntaxes.
 
-=head2 deploy_depends_on 
+=head2 deploy_depends_on
 
   __PACKAGE__->result_source_instance->deploy_depends_on(
       ["MyDB::Schema::Result::Year","MyDB::Schema::Result::CD"]
       );
 
-Specify the views (and only the views) that this view depends on.
-Pass this an array reference of fully qualified result classes.
+Currently if one view depends on another (i.e. the C<SELECT> statement of a
+view mentions another view), the user needs to specify any such dependencies
+manually. There are plans to automate this, but the current state of
+SQL-parsing tools does not yet allow reliable introspection of the C<SQL>
+composing a view. L</deploy_depends_on> takes an array reference of result
+B<class names> of other views on which the current one may depend. Note
+that there is no need to specify regular table classes, as all tables are
+deployed before any views.
 
 =head1 OVERRIDDEN METHODS
 
@@ -153,22 +159,15 @@ sub from {
     return $self->name;
 }
 
-=head1 OTHER METHODS
-
-=head2 new
-
-The constructor.
-
-=cut
 
 sub new {
-    my ( $self, @args ) = @_;
-    my $new = $self->next::method(@args);
-    $new->{deploy_depends_on} =
-      { map { $_ => 1 }
-          @{ $new->{deploy_depends_on} || [] } }
-      unless ref $new->{deploy_depends_on} eq 'HASH';
-    return $new;
+  my ( $self, @args ) = @_;
+  my $new = $self->next::method(@args);
+  $new->{deploy_depends_on} =
+    { map { $_ => 1 }
+        @{ $new->{deploy_depends_on} || [] } }
+    unless ref $new->{deploy_depends_on} eq 'HASH';
+  return $new;
 }
 
 1;
@@ -182,4 +181,3 @@ See L<DBIx::Class/CONTRIBUTORS>.
 You may distribute this code under the same terms as Perl itself.
 
 =cut
-

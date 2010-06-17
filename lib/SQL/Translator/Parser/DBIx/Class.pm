@@ -269,7 +269,7 @@ sub parse {
     my $dependencies = {
       map { $_ => _resolve_deps ($_, \%tables) } (keys %tables)
     };
-    
+
     for my $table (sort
       {
         keys %{$dependencies->{$a} || {} } <=> keys %{ $dependencies->{$b} || {} }
@@ -298,7 +298,6 @@ EOW
     }
 
     my %views;
-    my @views = map { $dbicschema->source($_) } keys %view_monikers;
 
     my $view_dependencies = {
         map {

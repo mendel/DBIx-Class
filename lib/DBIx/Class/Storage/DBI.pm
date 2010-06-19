@@ -11,15 +11,18 @@ use Carp::Clan qw/^DBIx::Class/;
 use DBI;
 use DBIx::Class::Storage::DBI::Cursor;
 use DBIx::Class::Storage::Statistics;
-use Scalar::Util();
-use List::Util();
-use Data::Dumper::Concise();
-use Sub::Name ();
+use Scalar::Util qw/refaddr weaken reftype blessed/;
+use Data::Dumper::Concise 'Dumper';
+use Sub::Name 'subname';
+use Try::Tiny;
+use File::Path 'make_path';
+use namespace::clean;
 
-__PACKAGE__->mk_group_accessors('simple' =>
-  qw/_connect_info _dbi_connect_info _dbh _sql_maker _sql_maker_opts _conn_pid
-     _conn_tid transaction_depth _dbh_autocommit _driver_determined savepoints/
-);
+__PACKAGE__->mk_group_accessors('simple' => qw/
+  _connect_info _dbi_connect_info _dbic_connect_attributes _driver_determined
+  _dbh _server_info_hash _conn_pid _conn_tid _sql_maker _sql_maker_opts
+  transaction_depth _dbh_autocommit  savepoints
+/);
 
 # the values for these accessors are picked out (and deleted) from
 # the attribute hashref passed to connect_info
@@ -33,15 +36,18 @@ __PACKAGE__->mk_group_accessors('simple' => @storage_options);
 # default cursor class, overridable in connect_info attributes
 __PACKAGE__->cursor_class('DBIx::Class::Storage::DBI::Cursor');
 
-__PACKAGE__->mk_group_accessors('inherited' => qw/sql_maker_class/);
+__PACKAGE__->mk_group_accessors('inherited' => qw/
+  sql_maker_class
+  _supports_insert_returning
+/);
 __PACKAGE__->sql_maker_class('DBIx::Class::SQLAHacks');
-
 
 # Each of these methods need _determine_driver called before itself
 # in order to function reliably. This is a purely DRY optimization
 my @rdbms_specific_methods = qw/
   deployment_statements
   sqlt_type
+  sql_maker
   build_datetime_parser
   datetime_parser_type
 
@@ -60,7 +66,7 @@ for my $meth (@rdbms_specific_methods) {
 
   no strict qw/refs/;
   no warnings qw/redefine/;
-  *{__PACKAGE__ ."::$meth"} = Sub::Name::subname $meth => sub {
+  *{__PACKAGE__ ."::$meth"} = subname $meth => sub {
     if (not $_[0]->_driver_determined) {
       $_[0]->_determine_driver;
       goto $_[0]->can($meth);
@@ -89,7 +95,7 @@ DBIx::Class::Storage::DBI - DBI storage handler
   );
 
   $schema->resultset('Book')->search({
-     written_on => $schema->storage->datetime_parser(DateTime->now)
+     written_on => $schema->storage->datetime_parser->format_datetime(DateTime->now)
   });
 
 =head1 DESCRIPTION
@@ -111,8 +117,100 @@ sub new {
   $new->{_in_dbh_do} = 0;
   $new->{_dbh_gen} = 0;
 
+  # read below to see what this does
+  $new->_arm_global_destructor;
+
   $new;
 }
+
+# This is hack to work around perl shooting stuff in random
+# order on exit(). If we do not walk the remaining storage
+# objects in an END block, there is a *small but real* chance
+# of a fork()ed child to kill the parent's shared DBI handle,
+# *before perl reaches the DESTROY in this package*
+# Yes, it is ugly and effective.
+{
+  my %seek_and_destroy;
+
+  sub _arm_global_destructor {
+    my $self = shift;
+    my $key = Scalar::Util::refaddr ($self);
+    $seek_and_destroy{$key} = $self;
+    Scalar::Util::weaken ($seek_and_destroy{$key});
+  }
+
+  END {
+    local $?; # just in case the DBI destructor changes it somehow
+
+    # destroy just the object if not native to this process/thread
+    $_->_preserve_foreign_dbh for (grep
+      { defined $_ }
+      values %seek_and_destroy
+    );
+  }
+}
+
+sub DESTROY {
+  my $self = shift;
+
+  # destroy just the object if not native to this process/thread
+  $self->_preserve_foreign_dbh;
+
+  # some databases need this to stop spewing warnings
+  if (my $dbh = $self->_dbh) {
+    try {
+      %{ $dbh->{CachedKids} } = ();
+      $dbh->disconnect;
+    };
+  }
+
+  $self->_dbh(undef);
+}
+
+sub _preserve_foreign_dbh {
+  my $self = shift;
+
+  return unless $self->_dbh;
+
+  $self->_verify_tid;
+
+  return unless $self->_dbh;
+
+  $self->_verify_pid;
+
+}
+
+# handle pid changes correctly - do not destroy parent's connection
+sub _verify_pid {
+  my $self = shift;
+
+  return if ( defined $self->_conn_pid and $self->_conn_pid == $$ );
+
+  $self->_dbh->{InactiveDestroy} = 1;
+  $self->_dbh(undef);
+  $self->{_dbh_gen}++;
+
+  return;
+}
+
+# very similar to above, but seems to FAIL if I set InactiveDestroy
+sub _verify_tid {
+  my $self = shift;
+
+  if ( ! defined $self->_conn_tid ) {
+    return; # no threads
+  }
+  elsif ( $self->_conn_tid == threads->tid ) {
+    return; # same thread
+  }
+
+  #$self->_dbh->{InactiveDestroy} = 1;  # why does t/51threads.t fail...?
+  $self->_dbh(undef);
+  $self->{_dbh_gen}++;
+
+  return;
+}
+
 
 =head2 connect_info
 
@@ -483,6 +581,11 @@ sub connect_info {
   $self->_dbi_connect_info([@args,
     %attrs && !(ref $args[0] eq 'CODE') ? \%attrs : ()]);
 
+  # FIXME - dirty:
+  # save attributes them in a separate accessor so they are always
+  # introspectable, even in case of a CODE $dbhmaker
+  $self->_dbic_connect_attributes (\%attrs);
+
   return $self->_connect_info;
 }
 
@@ -624,39 +727,26 @@ sub dbh_do {
 
   my $dbh = $self->_get_dbh;
 
-  return $self->$code($dbh, @_) if $self->{_in_dbh_do}
-      || $self->{transaction_depth};
+  return $self->$code($dbh, @_)
+    if ( $self->{_in_dbh_do} || $self->{transaction_depth} );
 
   local $self->{_in_dbh_do} = 1;
 
-  my @result;
-  my $want_array = wantarray;
+  # take a ref instead of a copy, to preserve coderef @_ aliasing semantics
+  my $args = \@_;
+  return try {
+    $self->$code ($dbh, @$args);
+  } catch {
+    $self->throw_exception($_) if $self->connected;
 
-  eval {
+    # We were not connected - reconnect and retry, but let any
+    #  exception fall right through this time
+    carp "Retrying $code after catching disconnected exception: $_"
+      if $ENV{DBIC_DBIRETRY_DEBUG};
 
-    if($want_array) {
-        @result = $self->$code($dbh, @_);
-    }
-    elsif(defined $want_array) {
-        $result[0] = $self->$code($dbh, @_);
-    }
-    else {
-        $self->$code($dbh, @_);
-    }
+    $self->_populate_dbh;
+    $self->$code($self->_dbh, @$args);
   };
-
-  # ->connected might unset $@ - copy
-  my $exception = $@;
-  if(!$exception) { return $want_array ? @result : $result[0] }
-
-  $self->throw_exception($exception) if $self->connected;
-
-  # We were not connected - reconnect and retry, but let any
-  #  exception fall right through this time
-  carp "Retrying $code after catching disconnected exception: $exception"
-    if $ENV{DBIC_DBIRETRY_DEBUG};
-  $self->_populate_dbh;
-  $self->$code($self->_dbh, @_);
 }
 
 # This is basically a blend of dbh_do above and DBIx::Class::Storage::txn_do.
@@ -678,30 +768,35 @@ sub txn_do {
 
   my $tried = 0;
   while(1) {
-    eval {
+    my $exception;
+
+    # take a ref instead of a copy, to preserve coderef @_ aliasing semantics
+    my $args = \@_;
+
+    try {
       $self->_get_dbh;
 
       $self->txn_begin;
       if($want_array) {
-          @result = $coderef->(@_);
+          @result = $coderef->(@$args);
       }
       elsif(defined $want_array) {
-          $result[0] = $coderef->(@_);
+          $result[0] = $coderef->(@$args);
       }
       else {
-          $coderef->(@_);
+          $coderef->(@$args);
       }
       $self->txn_commit;
+    } catch {
+      $exception = $_;
     };
 
-    # ->connected might unset $@ - copy
-    my $exception = $@;
-    if(!$exception) { return $want_array ? @result : $result[0] }
+    if(! defined $exception) { return $want_array ? @result : $result[0] }
 
     if($tried++ || $self->connected) {
-      eval { $self->txn_rollback };
-      my $rollback_exception = $@;
-      if($rollback_exception) {
+      my $rollback_exception;
+      try { $self->txn_rollback } catch { $rollback_exception = shift };
+      if(defined $rollback_exception) {
         my $exception_class = "DBIx::Class::Storage::NESTED_ROLLBACK_EXCEPTION";
         $self->throw_exception($exception)  # propagate nested rollback
           if $rollback_exception =~ /$exception_class/;
@@ -742,6 +837,7 @@ sub disconnect {
 
     $self->_dbh_rollback unless $self->_dbh_autocommit;
 
+    %{ $self->_dbh->{CachedKids} } = ();
     $self->_dbh->disconnect;
     $self->_dbh(undef);
     $self->{_dbh_gen}++;
@@ -798,18 +894,10 @@ sub connected {
 sub _seems_connected {
   my $self = shift;
 
+  $self->_preserve_foreign_dbh;
+
   my $dbh = $self->_dbh
     or return 0;
-
-  if(defined $self->_conn_tid && $self->_conn_tid != threads->tid) {
-    $self->_dbh(undef);
-    $self->{_dbh_gen}++;
-    return 0;
-  }
-  else {
-    $self->_verify_pid;
-    return 0 if !$self->_dbh;
-  }
 
   return $dbh->FETCH('Active');
 }
@@ -820,20 +908,6 @@ sub _ping {
   my $dbh = $self->_dbh or return 0;
 
   return $dbh->ping;
-}
-
-# handle pid changes correctly
-#  NOTE: assumes $self->_dbh is a valid $dbh
-sub _verify_pid {
-  my ($self) = @_;
-
-  return if defined $self->_conn_pid && $self->_conn_pid == $$;
-
-  $self->_dbh->{InactiveDestroy} = 1;
-  $self->_dbh(undef);
-  $self->{_dbh_gen}++;
-
-  return;
 }
 
 sub ensure_connected {
@@ -849,7 +923,7 @@ sub ensure_connected {
 Returns a C<$dbh> - a data base handle of class L<DBI>. The returned handle
 is guaranteed to be healthy by implicitly calling L</connected>, and if
 necessary performing a reconnection before returning. Keep in mind that this
-is very B<expensive> on some database engines. Consider using L<dbh_do>
+is very B<expensive> on some database engines. Consider using L</dbh_do>
 instead.
 
 =cut
@@ -868,7 +942,7 @@ sub dbh {
 # this is the internal "get dbh or connect (don't check)" method
 sub _get_dbh {
   my $self = shift;
-  $self->_verify_pid if $self->_dbh;
+  $self->_preserve_foreign_dbh;
   $self->_populate_dbh unless $self->_dbh;
   return $self->_dbh;
 }
@@ -903,6 +977,7 @@ sub _populate_dbh {
 
   my @info = @{$self->_dbi_connect_info || []};
   $self->_dbh(undef); # in case ->connected failed we might get sent here
+  $self->_server_info_hash (undef);
   $self->_dbh($self->_connect(@info));
 
   $self->_conn_pid($$);
@@ -927,6 +1002,48 @@ sub _run_connection_actions {
   $self->_do_connection_actions(connect_call_ => $_) for @actions;
 }
 
+sub _server_info {
+  my $self = shift;
+
+  unless ($self->_server_info_hash) {
+
+    my %info;
+
+    my $server_version = try { $self->_get_server_version };
+
+    if (defined $server_version) {
+      $info{dbms_version} = $server_version;
+
+      my ($numeric_version) = $server_version =~ /^([\d\.]+)/;
+      my @verparts = split (/\./, $numeric_version);
+      if (
+        @verparts
+          &&
+        $verparts[0] <= 999
+      ) {
+        # consider only up to 3 version parts, iff not more than 3 digits
+        my @use_parts;
+        while (@verparts && @use_parts < 3) {
+          my $p = shift @verparts;
+          last if $p > 999;
+          push @use_parts, $p;
+        }
+        push @use_parts, 0 while @use_parts < 3;
+
+        $info{normalized_dbms_version} = sprintf "%d.%03d%03d", @use_parts;
+      }
+    }
+
+    $self->_server_info_hash(\%info);
+  }
+
+  return $self->_server_info_hash
+}
+
+sub _get_server_version {
+  shift->_get_dbh->get_info(18);
+}
+
 sub _determine_driver {
   my ($self) = @_;
 
@@ -942,22 +1059,27 @@ sub _determine_driver {
       } else {
         # if connect_info is a CODEREF, we have no choice but to connect
         if (ref $self->_dbi_connect_info->[0] &&
-            Scalar::Util::reftype($self->_dbi_connect_info->[0]) eq 'CODE') {
+            reftype $self->_dbi_connect_info->[0] eq 'CODE') {
           $self->_populate_dbh;
           $driver = $self->_dbh->{Driver}{Name};
         }
         else {
           # try to use dsn to not require being connected, the driver may still
           # force a connection in _rebless to determine version
-          ($driver) = $self->_dbi_connect_info->[0] =~ /dbi:([^:]+):/i;
+          # (dsn may not be supplied at all if all we do is make a mock-schema)
+          my $dsn = $self->_dbi_connect_info->[0] || $ENV{DBI_DSN} || '';
+          ($driver) = $dsn =~ /dbi:([^:]+):/i;
+          $driver ||= $ENV{DBI_DRIVER};
         }
       }
 
-      my $storage_class = "DBIx::Class::Storage::DBI::${driver}";
-      if ($self->load_optional_class($storage_class)) {
-        mro::set_mro($storage_class, 'c3');
-        bless $self, $storage_class;
-        $self->_rebless();
+      if ($driver) {
+        my $storage_class = "DBIx::Class::Storage::DBI::${driver}";
+        if ($self->load_optional_class($storage_class)) {
+          mro::set_mro($storage_class, 'c3');
+          bless $self, $storage_class;
+          $self->_rebless();
+        }
       }
     }
 
@@ -1044,7 +1166,9 @@ sub _connect {
     $DBI::connect_via = 'connect';
   }
 
-  eval {
+  # FIXME - this should have been Try::Tiny, but triggers a leak-bug in perl(!)
+  # related to coderef refcounting. A failing test has been submitted to T::T
+  my $connect_ok = eval {
     if(ref $info[0] eq 'CODE') {
        $dbh = $info[0]->();
     }
@@ -1052,9 +1176,13 @@ sub _connect {
        $dbh = DBI->connect(@info);
     }
 
-    if($dbh && !$self->unsafe) {
+    if (!$dbh) {
+      die $DBI::errstr;
+    }
+
+    unless ($self->unsafe) {
       my $weak_self = $self;
-      Scalar::Util::weaken($weak_self);
+      weaken $weak_self;
       $dbh->{HandleError} = sub {
           if ($weak_self) {
             $weak_self->throw_exception("DBI Exception: $_[0]");
@@ -1069,15 +1197,18 @@ sub _connect {
       $dbh->{RaiseError} = 1;
       $dbh->{PrintError} = 0;
     }
+
+    1;
   };
 
+  my $possible_err = $@;
   $DBI::connect_via = $old_connect_via if $old_connect_via;
 
-  $self->throw_exception("DBI Connection failed: " . ($@||$DBI::errstr))
-    if !$dbh || $@;
+  unless ($connect_ok) {
+    $self->throw_exception("DBI Connection failed: $possible_err")
+  }
 
   $self->_dbh_autocommit($dbh->{AutoCommit});
-
   $dbh;
 }
 
@@ -1225,7 +1356,7 @@ sub _dbh_commit {
 sub txn_rollback {
   my $self = shift;
   my $dbh = $self->_dbh;
-  eval {
+  try {
     if ($self->{transaction_depth} == 1) {
       $self->debugobj->txn_rollback()
         if ($self->debug);
@@ -1243,15 +1374,17 @@ sub txn_rollback {
     else {
       die DBIx::Class::Storage::NESTED_ROLLBACK_EXCEPTION->new;
     }
-  };
-  if ($@) {
-    my $error = $@;
-    my $exception_class = "DBIx::Class::Storage::NESTED_ROLLBACK_EXCEPTION";
-    $error =~ /$exception_class/ and $self->throw_exception($error);
-    # ensure that a failed rollback resets the transaction depth
-    $self->{transaction_depth} = $self->_dbh_autocommit ? 0 : 1;
-    $self->throw_exception($error);
   }
+  catch {
+    my $exception_class = "DBIx::Class::Storage::NESTED_ROLLBACK_EXCEPTION";
+
+    if ($_ !~ /$exception_class/) {
+      # ensure that a failed rollback resets the transaction depth
+      $self->{transaction_depth} = $self->_dbh_autocommit ? 0 : 1;
+    }
+
+    $self->throw_exception($_)
+  };
 }
 
 sub _dbh_rollback {
@@ -1267,7 +1400,7 @@ sub _dbh_rollback {
 sub _prep_for_execute {
   my ($self, $op, $extra_bind, $ident, $args) = @_;
 
-  if( Scalar::Util::blessed($ident) && $ident->isa("DBIx::Class::ResultSource") ) {
+  if( blessed $ident && $ident->isa("DBIx::Class::ResultSource") ) {
     $ident = $ident->from();
   }
 
@@ -1346,7 +1479,9 @@ sub _dbh_execute {
 
   # Can this fail without throwing an exception anyways???
   my $rv = $sth->execute();
-  $self->throw_exception($sth->errstr) if !$rv;
+  $self->throw_exception(
+    $sth->errstr || $sth->err || 'Unknown error: execute() returned false, but error flags were not set...'
+  ) if !$rv;
 
   $self->_query_end( $sql, @$bind );
 
@@ -1358,29 +1493,56 @@ sub _execute {
     $self->dbh_do('_dbh_execute', @_);  # retry over disconnects
 }
 
-sub insert {
+sub _prefetch_insert_auto_nextvals {
   my ($self, $source, $to_insert) = @_;
 
-  my $ident = $source->from;
-  my $bind_attributes = $self->source_bind_attributes($source);
-
-  my $updated_cols = {};
+  my $upd = {};
 
   foreach my $col ( $source->columns ) {
     if ( !defined $to_insert->{$col} ) {
       my $col_info = $source->column_info($col);
 
       if ( $col_info->{auto_nextval} ) {
-        $updated_cols->{$col} = $to_insert->{$col} = $self->_sequence_fetch(
+        $upd->{$col} = $to_insert->{$col} = $self->_sequence_fetch(
           'nextval',
-          $col_info->{sequence} ||
-            $self->_dbh_get_autoinc_seq($self->_get_dbh, $source)
+          $col_info->{sequence} ||=
+            $self->_dbh_get_autoinc_seq($self->_get_dbh, $source, $col)
         );
       }
     }
   }
 
-  $self->_execute('insert' => [], $source, $bind_attributes, $to_insert);
+  return $upd;
+}
+
+sub insert {
+  my $self = shift;
+  my ($source, $to_insert, $opts) = @_;
+
+  my $updated_cols = $self->_prefetch_insert_auto_nextvals (@_);
+
+  my $bind_attributes = $self->source_bind_attributes($source);
+
+  my ($rv, $sth) = $self->_execute('insert' => [], $source, $bind_attributes, $to_insert, $opts);
+
+  if ($opts->{returning}) {
+    my @ret_cols = @{$opts->{returning}};
+
+    my @ret_vals = try {
+      local $SIG{__WARN__} = sub {};
+      my @r = $sth->fetchrow_array;
+      $sth->finish;
+      @r;
+    };
+
+    my %ret;
+    @ret{@ret_cols} = @ret_vals if (@ret_vals);
+
+    $updated_cols = {
+      %$updated_cols,
+      %ret,
+    };
+  }
 
   return $updated_cols;
 }
@@ -1409,9 +1571,9 @@ sub insert_bulk {
       $cols->[$col_idx],
       do {
         local $Data::Dumper::Maxdepth = 1; # don't dump objects, if any
-        Data::Dumper::Concise::Dumper({
+        Dumper {
           map { $cols->[$_] => $data->[$slice_idx][$_] } (0 .. $#$cols)
-        }),
+        },
       }
     );
   };
@@ -1467,7 +1629,7 @@ sub insert_bulk {
   # neither _execute_array, nor _execute_inserts_with_no_binds are
   # atomic (even if _execute _array is a single call). Thus a safety
   # scope guard
-  my $guard = $self->txn_scope_guard unless $self->{transaction_depth} != 0;
+  my $guard = $self->txn_scope_guard;
 
   $self->_query_start( $sql, ['__BULK__'] );
   my $sth = $self->sth($sql);
@@ -1484,8 +1646,7 @@ sub insert_bulk {
 
   $self->_query_end( $sql, ['__BULK__'] );
 
-
-  $guard->commit if $guard;
+  $guard->commit;
 
   return (wantarray ? ($rv, $sth, @bind) : $rv);
 }
@@ -1514,20 +1675,35 @@ sub _execute_array {
 
     my @data = map { $_->[$data_index] } @$data;
 
-    $sth->bind_param_array( $placeholder_index, [@data], $attributes );
+    $sth->bind_param_array(
+      $placeholder_index,
+      [@data],
+      (%$attributes ?  $attributes : ()),
+    );
     $placeholder_index++;
   }
 
-  my $rv = eval {
-    $self->_dbh_execute_array($sth, $tuple_status, @extra);
+  my ($rv, $err);
+  try {
+    $rv = $self->_dbh_execute_array($sth, $tuple_status, @extra);
+  }
+  catch {
+    $err = shift;
+  }
+  finally {
+    # Statement must finish even if there was an exception.
+    try {
+      $sth->finish
+    }
+    catch {
+      $err = shift unless defined $err
+    };
   };
-  my $err = $@ || $sth->errstr;
 
-# Statement must finish even if there was an exception.
-  eval { $sth->finish };
-  $err = $@ unless $err;
+  $err = $sth->errstr
+    if (! defined $err and $sth->err);
 
-  if ($err) {
+  if (defined $err) {
     my $i = 0;
     ++$i while $i <= $#$tuple_status && !ref $tuple_status->[$i];
 
@@ -1536,11 +1712,10 @@ sub _execute_array {
 
     $self->throw_exception(sprintf "%s for populate slice:\n%s",
       ($tuple_status->[$i][1] || $err),
-      Data::Dumper::Concise::Dumper({
-        map { $cols->[$_] => $data->[$i][$_] } (0 .. $#$cols)
-      }),
+      Dumper { map { $cols->[$_] => $data->[$i][$_] } (0 .. $#$cols) },
     );
   }
+
   return $rv;
 }
 
@@ -1553,20 +1728,28 @@ sub _dbh_execute_array {
 sub _dbh_execute_inserts_with_no_binds {
   my ($self, $sth, $count) = @_;
 
-  eval {
+  my $err;
+  try {
     my $dbh = $self->_get_dbh;
     local $dbh->{RaiseError} = 1;
     local $dbh->{PrintError} = 0;
 
     $sth->execute foreach 1..$count;
+  }
+  catch {
+    $err = shift;
+  }
+  finally {
+    # Make sure statement is finished even if there was an exception.
+    try {
+      $sth->finish
+    }
+    catch {
+      $err = shift unless defined $err;
+    };
   };
-  my $exception = $@;
 
-# Make sure statement is finished even if there was an exception.
-  eval { $sth->finish };
-  $exception = $@ unless $exception;
-
-  $self->throw_exception($exception) if $exception;
+  $self->throw_exception($err) if defined $err;
 
   return $count;
 }
@@ -1687,31 +1870,18 @@ sub _per_row_update_delete {
 
 sub _select {
   my $self = shift;
-
-  # localization is neccessary as
-  # 1) there is no infrastructure to pass this around before SQLA2
-  # 2) _select_args sets it and _prep_for_execute consumes it
-  my $sql_maker = $self->sql_maker;
-  local $sql_maker->{_dbic_rs_attrs};
-
-  return $self->_execute($self->_select_args(@_));
+  $self->_execute($self->_select_args(@_));
 }
 
 sub _select_args_to_query {
   my $self = shift;
 
-  # localization is neccessary as
-  # 1) there is no infrastructure to pass this around before SQLA2
-  # 2) _select_args sets it and _prep_for_execute consumes it
-  my $sql_maker = $self->sql_maker;
-  local $sql_maker->{_dbic_rs_attrs};
-
-  # my ($op, $bind, $ident, $bind_attrs, $select, $cond, $order, $rows, $offset)
+  # my ($op, $bind, $ident, $bind_attrs, $select, $cond, $rs_attrs, $rows, $offset)
   #  = $self->_select_args($ident, $select, $cond, $attrs);
   my ($op, $bind, $ident, $bind_attrs, @args) =
     $self->_select_args(@_);
 
-  # my ($sql, $prepared_bind) = $self->_prep_for_execute($op, $bind, $ident, [ $select, $cond, $order, $rows, $offset ]);
+  # my ($sql, $prepared_bind) = $self->_prep_for_execute($op, $bind, $ident, [ $select, $cond, $rs_attrs, $rows, $offset ]);
   my ($sql, $prepared_bind) = $self->_prep_for_execute($op, $bind, $ident, \@args);
   $prepared_bind ||= [];
 
@@ -1724,16 +1894,16 @@ sub _select_args_to_query {
 sub _select_args {
   my ($self, $ident, $select, $where, $attrs) = @_;
 
+  my $sql_maker = $self->sql_maker;
   my ($alias2source, $rs_alias) = $self->_resolve_ident_sources ($ident);
 
-  my $sql_maker = $self->sql_maker;
-  $sql_maker->{_dbic_rs_attrs} = {
+  $attrs = {
     %$attrs,
     select => $select,
     from => $ident,
     where => $where,
     $rs_alias && $alias2source->{$rs_alias}
-      ? ( _source_handle => $alias2source->{$rs_alias}->handle )
+      ? ( _rsroot_source_handle => $alias2source->{$rs_alias}->handle )
       : ()
     ,
   };
@@ -1766,19 +1936,13 @@ sub _select_args {
   }
 
   # adjust limits
-  if (
-    $attrs->{software_limit}
-      ||
-    $sql_maker->_default_limit_syntax eq "GenericSubQ"
-  ) {
-    $attrs->{software_limit} = 1;
-  }
-  else {
+  if (defined $attrs->{rows}) {
     $self->throw_exception("rows attribute must be positive if present")
-      if (defined($attrs->{rows}) && !($attrs->{rows} > 0));
-
+      unless $attrs->{rows} > 0;
+  }
+  elsif (defined $attrs->{offset}) {
     # MySQL actually recommends this approach.  I cringe.
-    $attrs->{rows} = 2**48 if not defined $attrs->{rows} and defined $attrs->{offset};
+    $attrs->{rows} = $sql_maker->__max_int;
   }
 
   my @limit;
@@ -1789,18 +1953,7 @@ sub _select_args {
     # limited collapsing has_many
     ( $attrs->{rows} && $attrs->{collapse} )
        ||
-    # limited prefetch with RNO subqueries
-    (
-      $attrs->{rows}
-        &&
-      $sql_maker->limit_dialect eq 'RowNumberOver'
-        &&
-      $attrs->{_prefetch_select}
-        &&
-      @{$attrs->{_prefetch_select}}
-    )
-      ||
-    # grouped prefetch
+    # grouped prefetch (to satisfy group_by == select)
     ( $attrs->{group_by}
         &&
       @{$attrs->{group_by}}
@@ -1813,39 +1966,6 @@ sub _select_args {
     ($ident, $select, $where, $attrs)
       = $self->_adjust_select_args_for_complex_prefetch ($ident, $select, $where, $attrs);
   }
-
-  elsif (
-    ($attrs->{rows} || $attrs->{offset})
-      &&
-    $sql_maker->limit_dialect eq 'RowNumberOver'
-      &&
-    (ref $ident eq 'ARRAY' && @$ident > 1)  # indicates a join
-      &&
-    scalar $self->_parse_order_by ($attrs->{order_by})
-  ) {
-    # the RNO limit dialect above mangles the SQL such that the join gets lost
-    # wrap a subquery here
-
-    push @limit, delete @{$attrs}{qw/rows offset/};
-
-    my $subq = $self->_select_args_to_query (
-      $ident,
-      $select,
-      $where,
-      $attrs,
-    );
-
-    $ident = {
-      -alias => $attrs->{alias},
-      -source_handle => $ident->[0]{-source_handle},
-      $attrs->{alias} => $subq,
-    };
-
-    # all part of the subquery now
-    delete @{$attrs}{qw/order_by group_by having/};
-    $where = undef;
-  }
-
   elsif (! $attrs->{software_limit} ) {
     push @limit, $attrs->{rows}, $attrs->{offset};
   }
@@ -1863,12 +1983,7 @@ sub _select_args {
   # invoked, and that's just bad...
 ###
 
-  my $order = { map
-    { $attrs->{$_} ? ( $_ => $attrs->{$_} ) : ()  }
-    (qw/order_by group_by having/ )
-  };
-
-  return ('select', $attrs->{bind}, $ident, $bind_attrs, $select, $where, $order, @limit);
+  return ('select', $attrs->{bind}, $ident, $bind_attrs, $select, $where, $attrs, @limit);
 }
 
 # Returns a counting SELECT for a simple count
@@ -1880,46 +1995,6 @@ sub _count_select {
   return { count => '*' };
 }
 
-# Returns a SELECT which will end up in the subselect
-# There may or may not be a group_by, as the subquery
-# might have been called to accomodate a limit
-#
-# Most databases would be happy with whatever ends up
-# here, but some choke in various ways.
-#
-sub _subq_count_select {
-  my ($self, $source, $rs_attrs) = @_;
-
-  if (my $groupby = $rs_attrs->{group_by}) {
-
-    my $avail_columns = $self->_resolve_column_info ($rs_attrs->{from});
-
-    my $sel_index;
-    for my $sel (@{$rs_attrs->{select}}) {
-      if (ref $sel eq 'HASH' and $sel->{-as}) {
-        $sel_index->{$sel->{-as}} = $sel;
-      }
-    }
-
-    my @selection;
-    for my $g_part (@$groupby) {
-      if (ref $g_part or $avail_columns->{$g_part}) {
-        push @selection, $g_part;
-      }
-      elsif ($sel_index->{$g_part}) {
-        push @selection, $sel_index->{$g_part};
-      }
-      else {
-        $self->throw_exception ("group_by criteria '$g_part' not contained within current resultset source(s)");
-      }
-    }
-
-    return \@selection;
-  }
-
-  my @pcols = map { join '.', $rs_attrs->{alias}, $_ } ($source->primary_columns);
-  return @pcols ? \@pcols : [ 1 ];
-}
 
 sub source_bind_attributes {
   my ($self, $source) = @_;
@@ -2003,7 +2078,8 @@ sub _dbh_columns_info_for {
 
   if ($dbh->can('column_info')) {
     my %result;
-    eval {
+    my $caught;
+    try {
       my ($schema,$tab) = $table =~ /^(.+?)\.(.+)$/ ? ($1,$2) : (undef,$table);
       my $sth = $dbh->column_info( undef,$schema, $tab, '%' );
       $sth->execute();
@@ -2018,8 +2094,10 @@ sub _dbh_columns_info_for {
 
         $result{$col_name} = \%column_info;
       }
+    } catch {
+      $caught = 1;
     };
-    return \%result if !$@ && scalar keys %result;
+    return \%result if !$caught && scalar keys %result;
   }
 
   my %result;
@@ -2069,7 +2147,7 @@ Return the row id of the last insert.
 sub _dbh_last_insert_id {
     my ($self, $dbh, $source, $col) = @_;
 
-    my $id = eval { $dbh->last_insert_id (undef, undef, $source->name, $col) };
+    my $id = try { $dbh->last_insert_id (undef, undef, $source->name, $col) };
 
     return $id if defined $id;
 
@@ -2120,12 +2198,15 @@ sub _placeholders_supported {
 
   # some drivers provide a $dbh attribute (e.g. Sybase and $dbh->{syb_dynamic_supported})
   # but it is inaccurate more often than not
-  eval {
+  return try {
     local $dbh->{PrintError} = 0;
     local $dbh->{RaiseError} = 1;
     $dbh->do('select ?', {}, 1);
+    1;
+  }
+  catch {
+    0;
   };
-  return $@ ? 0 : 1;
 }
 
 # Check if placeholders bound to non-string types throw exceptions
@@ -2134,13 +2215,16 @@ sub _typeless_placeholders_supported {
   my $self = shift;
   my $dbh  = $self->_get_dbh;
 
-  eval {
+  return try {
     local $dbh->{PrintError} = 0;
     local $dbh->{RaiseError} = 1;
     # this specifically tests a bind that is NOT a string
     $dbh->do('select 1 where 1 = ?', {}, 1);
+    1;
+  }
+  catch {
+    0;
   };
-  return $@ ? 0 : 1;
 }
 
 =head2 sqlt_type
@@ -2248,10 +2332,21 @@ them.
 sub create_ddl_dir {
   my ($self, $schema, $databases, $version, $dir, $preversion, $sqltargs) = @_;
 
-  if(!$dir || !-d $dir) {
+  unless ($dir) {
     carp "No directory given, using ./\n";
-    $dir = "./";
+    $dir = './';
+  } else {
+      -d $dir
+        or
+      make_path ("$dir")  # make_path does not like objects (i.e. Path::Class::Dir)
+        or
+      $self->throw_exception(
+        "Failed to create '$dir': " . ($! || $@ || 'error unknow')
+      );
   }
+
+  $self->throw_exception ("Directory '$dir' does not exist\n") unless(-d $dir);
+
   $databases ||= ['MySQL', 'SQLite', 'PostgreSQL'];
   $databases = [ $databases ] if(ref($databases) ne 'ARRAY');
 
@@ -2451,14 +2546,13 @@ sub deploy {
     return if($line =~ /^COMMIT/m);
     return if $line =~ /^\s+$/; # skip whitespace only
     $self->_query_start($line);
-    eval {
+    try {
       # do a dbh_do cycle here, as we need some error checking in
       # place (even though we will ignore errors)
       $self->dbh_do (sub { $_[1]->do($line) });
+    } catch {
+      carp qq{$_ (running "${line}")};
     };
-    if ($@) {
-      carp qq{$@ (running "${line}")};
-    }
     $self->_query_end($line);
   };
   my @statements = $schema->deployment_statements($type, undef, $dir, { %{ $sqltargs || {} }, no_comments => 1 } );
@@ -2561,23 +2655,6 @@ sub relname_to_table_alias {
     join('_', $relname, $join_count) : $relname);
 
   return $alias;
-}
-
-sub DESTROY {
-  my $self = shift;
-
-  $self->_verify_pid if $self->_dbh;
-
-  # some databases need this to stop spewing warnings
-  if (my $dbh = $self->_dbh) {
-    local $@;
-    eval {
-      %{ $dbh->{CachedKids} } = ();
-      $dbh->disconnect;
-    };
-  }
-
-  $self->_dbh(undef);
 }
 
 1;

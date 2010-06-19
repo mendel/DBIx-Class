@@ -27,7 +27,7 @@ sub component_base_class { 'DBIx::Class' }
 # Always remember to do all digits for the version even if they're 0
 # i.e. first release of 0.XX *must* be 0.XX000. This avoids fBSD ports
 # brain damage and presumably various other packaging systems too
-$VERSION = '0.08120_1';
+$VERSION = '0.08123_01';
 
 $VERSION = eval $VERSION if $VERSION =~ /_/; # numify for warning-free dev releases
 
@@ -42,8 +42,11 @@ sub MODIFY_CODE_ATTRIBUTES {
 sub _attr_cache {
   my $self = shift;
   my $cache = $self->can('__attr_cache') ? $self->__attr_cache : {};
-  my $rest = eval { $self->next::method };
-  return $@ ? $cache : { %$cache, %$rest };
+
+  return {
+    %$cache,
+    %{ $self->maybe::next::method || {} },
+  };
 }
 
 1;
@@ -58,16 +61,18 @@ The community can be found via:
 
 =over
 
-=item * IRC: L<irc.perl.org#dbix-class (click for instant chatroom login)
-|http://mibbit.com/chat/#dbix-class@irc.perl.org>
+=item * IRC: irc.perl.org#dbix-class
+
+=for html
+<a href="http://mibbit.com/chat/#dbix-class@irc.perl.org">(click for instant chatroom login)</a>
 
 =item * Mailing list: L<http://lists.scsys.co.uk/mailman/listinfo/dbix-class>
 
 =item * RT Bug Tracker: L<https://rt.cpan.org/Dist/Display.html?Queue=DBIx-Class>
 
-=item * SVNWeb: L<http://dev.catalyst.perl.org/svnweb/bast/browse/DBIx-Class/0.08>
+=item * gitweb: L<http://git.shadowcat.co.uk/gitweb/gitweb.cgi?p=dbsrgits/DBIx-Class.git>
 
-=item * SVN: L<http://dev.catalyst.perl.org/repos/bast/DBIx-Class/0.08>
+=item * git: L<git://git.shadowcat.co.uk/dbsrgits/DBIx-Class.git>
 
 =back
 
@@ -218,9 +223,13 @@ is traditional :)
 
 =head1 CONTRIBUTORS
 
-abraxxa: Alexander Hartmaier <alex_hartmaier@hotmail.com>
+abraxxa: Alexander Hartmaier <abraxxa@cpan.org>
 
 aherzog: Adam Herzog <adam@herzogdesigns.com>
+
+Alexander Keusch <cpan@keusch.at>
+
+amoore: Andrew Moore <amoore@cpan.org>
 
 andyg: Andy Grundman <andy@hybridized.org>
 
@@ -260,6 +269,8 @@ dkubb: Dan Kubb <dan.kubb-cpan@onautopilot.com>
 
 dnm: Justin Wheeler <jwheeler@datademons.com>
 
+dpetrov: Dimitar Petrov <mitakaa@gmail.com>
+
 dwc: Daniel Westermann-Clark <danieltwc@cpan.org>
 
 dyfrgi: Michael Leuchtenburg <michael@slashhome.org>
@@ -271,6 +282,10 @@ goraxe: Gordon Irving <goraxe@cpan.org>
 gphat: Cory G Watson <gphat@cpan.org>
 
 groditi: Guillermo Roditi <groditi@cpan.org>
+
+Haarg: Graham Knop <haarg@haarg.org>
+
+hobbs: Andrew Rodland <arodland@cpan.org>
 
 ilmari: Dagfinn Ilmari MannsE<aring>ker <ilmari@ilmari.org>
 
@@ -330,9 +345,15 @@ phaylon: Robert Sedlacek <phaylon@dunkelheit.at>
 
 plu: Johannes Plunien <plu@cpan.org>
 
+Possum: Daniel LeWarne <possum@cpan.org>
+
 quicksilver: Jules Bean
 
 rafl: Florian Ragwitz <rafl@debian.org>
+
+rainboxx: Matthias Dietrich <perl@rb.ly>
+
+rbo: Robert Bohne <rbo@cpan.org>
 
 rbuels: Robert Buels <rmb32@cornell.edu>
 
@@ -363,6 +384,8 @@ teejay : Aaron Trevena <teejay@cpan.org>
 Todd Lipcon
 
 Tom Hukins
+
+tonvoon: Ton Voon <tonvoon@cpan.org>
 
 triode: Pete Gamache <gamache@cpan.org>
 

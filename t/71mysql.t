@@ -194,6 +194,29 @@ lives_ok { $cd->set_producers ([ $producer ]) } 'set_relationship doesnt die';
   );
 }
 
+{
+  # Test support for straight joins
+  my $cdsrc = $schema->source('CD');
+  my $artrel_info = $cdsrc->relationship_info ('artist');
+  $cdsrc->add_relationship(
+    'straight_artist',
+    $artrel_info->{class},
+    $artrel_info->{cond},
+    { %{$artrel_info->{attrs}}, join_type => 'straight' },
+  );
+  is_same_sql_bind (
+    $cdsrc->resultset->search({}, { prefetch => 'straight_artist' })->as_query,
+    '(
+      SELECT me.cdid, me.artist, me.title, me.year, me.genreid, me.single_track,
+             straight_artist.artistid, straight_artist.name, straight_artist.rank, straight_artist.charfield
+        FROM cd me
+        STRAIGHT_JOIN artist straight_artist ON straight_artist.artistid = me.artist
+    )',
+    [],
+    'straight joins correctly supported for mysql'
+  );
+}
+
 ## Can we properly deal with the null search problem?
 ##
 ## Only way is to do a SET SQL_AUTO_IS_NULL = 0; on connect
@@ -227,7 +250,11 @@ NULLINSEARCH: {
 
 # check for proper grouped counts
 {
-  my $ansi_schema = DBICTest::Schema->connect ($dsn, $user, $pass, { on_connect_call => 'set_strict_mode' });
+  my $ansi_schema = DBICTest::Schema->connect ($dsn, $user, $pass, {
+    on_connect_call => 'set_strict_mode',
+    quote_char => '`',
+    name_sep => '.'
+  });
   my $rs = $ansi_schema->resultset('CD');
 
   my $years;
@@ -240,6 +267,14 @@ NULLINSEARCH: {
       'grouped count correct',
     );
   }, 'Grouped count does not throw');
+
+  lives_ok( sub {
+    $ansi_schema->resultset('Owners')->search({}, {
+      join => 'books', group_by => [ 'me.id', 'books.id' ]
+    })->count();
+  }, 'count on grouped columns with the same name does not throw');
+
+
 }
 
 ZEROINSEARCH: {

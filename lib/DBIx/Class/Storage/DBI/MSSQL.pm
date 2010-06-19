@@ -3,10 +3,11 @@ package DBIx::Class::Storage::DBI::MSSQL;
 use strict;
 use warnings;
 
-use base qw/DBIx::Class::Storage::DBI/;
+use base qw/DBIx::Class::Storage::DBI::UniqueIdentifier/;
 use mro 'c3';
-
-use List::Util();
+use Try::Tiny;
+use List::Util 'first';
+use namespace::clean;
 
 __PACKAGE__->mk_group_accessors(simple => qw/
   _identity _identity_method
@@ -23,13 +24,13 @@ sub _set_identity_insert {
   );
 
   my $dbh = $self->_get_dbh;
-  eval { $dbh->do ($sql) };
-  if ($@) {
+  try { $dbh->do ($sql) }
+  catch {
     $self->throw_exception (sprintf "Error executing '%s': %s",
       $sql,
       $dbh->errstr,
     );
-  }
+  };
 }
 
 sub _unset_identity_insert {
@@ -48,12 +49,8 @@ sub insert_bulk {
   my $self = shift;
   my ($source, $cols, $data) = @_;
 
-  my $is_identity_insert = (List::Util::first
-      { $source->column_info ($_)->{is_auto_increment} }
-      (@{$cols})
-  )
-     ? 1
-     : 0;
+  my $is_identity_insert =
+    (first { $source->column_info ($_)->{is_auto_increment} } @{$cols}) ? 1 : 0;
 
   if ($is_identity_insert) {
      $self->_set_identity_insert ($source->name);
@@ -66,57 +63,24 @@ sub insert_bulk {
   }
 }
 
-# support MSSQL GUID column types
-
 sub insert {
   my $self = shift;
   my ($source, $to_insert) = @_;
 
   my $supplied_col_info = $self->_resolve_column_info($source, [keys %$to_insert] );
 
-  my %guid_cols;
-  my @pk_cols = $source->primary_columns;
-  my %pk_cols;
-  @pk_cols{@pk_cols} = ();
-
-  my @pk_guids = grep {
-    $source->column_info($_)->{data_type}
-    &&
-    $source->column_info($_)->{data_type} =~ /^uniqueidentifier/i
-  } @pk_cols;
-
-  my @auto_guids = grep {
-    $source->column_info($_)->{data_type}
-    &&
-    $source->column_info($_)->{data_type} =~ /^uniqueidentifier/i
-    &&
-    $source->column_info($_)->{auto_nextval}
-  } grep { not exists $pk_cols{$_} } $source->columns;
-
-  my @get_guids_for =
-    grep { not exists $to_insert->{$_} } (@pk_guids, @auto_guids);
-
-  my $updated_cols = {};
-
-  for my $guid_col (@get_guids_for) {
-    my ($new_guid) = $self->_get_dbh->selectrow_array('SELECT NEWID()');
-    $updated_cols->{$guid_col} = $to_insert->{$guid_col} = $new_guid;
-  }
-
-  my $is_identity_insert = (List::Util::first { $_->{is_auto_increment} } (values %$supplied_col_info) )
-     ? 1
-     : 0;
+  my $is_identity_insert =
+    (first { $_->{is_auto_increment} } values %$supplied_col_info) ? 1 : 0;
 
   if ($is_identity_insert) {
      $self->_set_identity_insert ($source->name);
   }
 
-  $updated_cols = { %$updated_cols, %{ $self->next::method(@_) } };
+  my $updated_cols = $self->next::method(@_);
 
   if ($is_identity_insert) {
      $self->_unset_identity_insert ($source->name);
   }
-
 
   return $updated_cols;
 }
@@ -160,7 +124,7 @@ sub _execute {
 
     # this should bring back the result of SELECT SCOPE_IDENTITY() we tacked
     # on in _prep_for_execute above
-    my ($identity) = eval { $sth->fetchrow_array };
+    my ($identity) = try { $sth->fetchrow_array };
 
     # SCOPE_IDENTITY failed, but we can do something else
     if ( (! $identity) && $self->_identity_method) {
@@ -190,11 +154,15 @@ sub _select_args_to_query {
 
   # see if this is an ordered subquery
   my $attrs = $_[3];
-  if ( scalar $self->_parse_order_by ($attrs->{order_by}) ) {
+  if (
+    $sql !~ /^ \s* SELECT \s+ TOP \s+ \d+ \s+ /xi
+      &&
+    scalar $self->_parse_order_by ($attrs->{order_by})
+  ) {
     $self->throw_exception(
       'An ordered subselect encountered - this is not safe! Please see "Ordered Subselects" in DBIx::Class::Storage::DBI::MSSQL
     ') unless $attrs->{unsafe_subselect_ok};
-    my $max = 2 ** 32;
+    my $max = $self->sql_maker->__max_int;
     $sql =~ s/^ \s* SELECT \s/SELECT TOP $max /xi;
   }
 
@@ -222,37 +190,35 @@ sub _svp_rollback {
   $self->_get_dbh->do("ROLLBACK TRANSACTION $name");
 }
 
-sub build_datetime_parser {
-  my $self = shift;
-  my $type = "DateTime::Format::Strptime";
-  eval "use ${type}";
-  $self->throw_exception("Couldn't load ${type}: $@") if $@;
-  return $type->new( pattern => '%Y-%m-%d %H:%M:%S' );  # %F %T
+sub datetime_parser_type {
+  'DBIx::Class::Storage::DBI::MSSQL::DateTime::Format'
 }
 
 sub sqlt_type { 'SQLServer' }
-
-sub _get_mssql_version {
-  my $self = shift;
-
-  my $data = $self->_get_dbh->selectrow_hashref('xp_msver ProductVersion');
-
-  if ($data->{Character_Value} =~ /^(\d+)\./) {
-    return $1;
-  } else {
-    $self->throw_exception(q{Your ProductVersion's Character_Value is missing or malformed!});
-  }
-}
 
 sub sql_maker {
   my $self = shift;
 
   unless ($self->_sql_maker) {
     unless ($self->{_sql_maker_opts}{limit_dialect}) {
-      my $version = eval { $self->_get_mssql_version; } || 0;
+      my $have_rno = 0;
+
+      if (exists $self->_server_info->{normalized_dbms_version}) {
+        $have_rno = 1 if $self->_server_info->{normalized_dbms_version} >= 9;
+      }
+      else {
+        # User is connecting via DBD::Sybase and has no permission to run
+        # stored procedures like xp_msver, or version detection failed for some
+        # other reason.
+        # So, we use a query to check if RNO is implemented.
+        try {
+          $self->_get_dbh->selectrow_array('SELECT row_number() OVER (ORDER BY rand())');
+          $have_rno = 1;
+        };
+      }
 
       $self->{_sql_maker_opts} = {
-        limit_dialect => ($version >= 9 ? 'RowNumberOver' : 'Top'),
+        limit_dialect => ($have_rno ? 'RowNumberOver' : 'Top'),
         %{$self->{_sql_maker_opts}||{}}
       };
     }
@@ -261,6 +227,70 @@ sub sql_maker {
   }
 
   return $self->_sql_maker;
+}
+
+sub _ping {
+  my $self = shift;
+
+  my $dbh = $self->_dbh or return 0;
+
+  local $dbh->{RaiseError} = 1;
+  local $dbh->{PrintError} = 0;
+
+  return try {
+    $dbh->do('select 1');
+    1;
+  } catch {
+    0;
+  };
+}
+
+package # hide from PAUSE
+  DBIx::Class::Storage::DBI::MSSQL::DateTime::Format;
+
+my $datetime_format      = '%Y-%m-%d %H:%M:%S.%3N'; # %F %T
+my $smalldatetime_format = '%Y-%m-%d %H:%M:%S';
+
+my ($datetime_parser, $smalldatetime_parser);
+
+sub parse_datetime {
+  shift;
+  require DateTime::Format::Strptime;
+  $datetime_parser ||= DateTime::Format::Strptime->new(
+    pattern  => $datetime_format,
+    on_error => 'croak',
+  );
+  return $datetime_parser->parse_datetime(shift);
+}
+
+sub format_datetime {
+  shift;
+  require DateTime::Format::Strptime;
+  $datetime_parser ||= DateTime::Format::Strptime->new(
+    pattern  => $datetime_format,
+    on_error => 'croak',
+  );
+  return $datetime_parser->format_datetime(shift);
+}
+
+sub parse_smalldatetime {
+  shift;
+  require DateTime::Format::Strptime;
+  $smalldatetime_parser ||= DateTime::Format::Strptime->new(
+    pattern  => $smalldatetime_format,
+    on_error => 'croak',
+  );
+  return $smalldatetime_parser->parse_datetime(shift);
+}
+
+sub format_smalldatetime {
+  shift;
+  require DateTime::Format::Strptime;
+  $smalldatetime_parser ||= DateTime::Format::Strptime->new(
+    pattern  => $smalldatetime_format,
+    on_error => 'croak',
+  );
+  return $smalldatetime_parser->format_datetime(shift);
 }
 
 1;
@@ -358,7 +388,7 @@ different/better way to get the same result - please file a bugreport.
 
 =head1 AUTHOR
 
-See L<DBIx::Class/CONTRIBUTORS>.
+See L<DBIx::Class/AUTHOR> and L<DBIx::Class/CONTRIBUTORS>.
 
 =head1 LICENSE
 

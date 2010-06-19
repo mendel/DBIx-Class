@@ -2,10 +2,9 @@ package DBIx::Class::ResultSet;
 
 use strict;
 use warnings;
-use overload
-        '0+'     => "count",
-        'bool'   => "_bool",
-        fallback => 1;
+
+use base qw/DBIx::Class/;
+
 use Carp::Clan qw/^DBIx::Class/;
 use DBIx::Class::Exception;
 use Data::Page;
@@ -13,12 +12,18 @@ use Storable;
 use DBIx::Class::ResultSetColumn;
 use DBIx::Class::ResultSourceHandle;
 use List::Util ();
-use Scalar::Util ();
-
-use base qw/DBIx::Class/;
+use Scalar::Util 'blessed';
 
 #use Test::Deep::NoTest (qw/eq_deeply/);
 use Data::Dumper::Concise;
+
+use namespace::clean;
+
+use overload
+        '0+'     => "count",
+        'bool'   => "_bool",
+        fallback => 1;
+
 
 __PACKAGE__->mk_group_accessors('simple' => qw/_result_class _source_handle/);
 
@@ -29,6 +34,10 @@ DBIx::Class::ResultSet - Represents a query used for fetching a set of results.
 =head1 SYNOPSIS
 
   my $users_rs   = $schema->resultset('User');
+  while( $user = $users_rs->next) {
+    print $user->username;
+  }
+
   my $registered_users_rs   = $schema->resultset('User')->search({ registered => 1 });
   my @cds_in_2005 = $schema->resultset('CD')->search({ year => 2005 })->all();
 
@@ -57,7 +66,12 @@ represents.
 
 The query that the ResultSet represents is B<only> executed against
 the database when these methods are called:
-L</find> L</next> L</all> L</first> L</single> L</count>
+L</find>, L</next>, L</all>, L</first>, L</single>, L</count>.
+
+If a resultset is used in a numeric context it returns the L</count>.
+However, if it is used in a boolean context it is B<always> true.  So if
+you want to check if a resultset has any results, you must use C<if $rs
+!= 0>.
 
 =head1 EXAMPLES
 
@@ -101,7 +115,7 @@ attributes with the same keys need resolving.
 L</join>, L</prefetch>, L</+select>, L</+as> attributes are merged
 into the existing ones from the original resultset.
 
-The L</where>, L</having> attribute, and any search conditions are
+The L</where> and L</having> attributes, and any search conditions, are
 merged with an SQL C<AND> to the existing condition from the original
 resultset.
 
@@ -141,13 +155,6 @@ Which is the same as:
   });
 
 See: L</search>, L</count>, L</get_column>, L</all>, L</create>.
-
-=head1 OVERLOADING
-
-If a resultset is used in a numeric context it returns the L</count>.
-However, if it is used in a boolean context it is always true.  So if
-you want to check if a resultset has any results use C<if $rs != 0>.
-C<if $rs> will always be true.
 
 =head1 METHODS
 
@@ -199,7 +206,6 @@ sub new {
   my $self = {
     _source_handle => $source,
     cond => $attrs->{where},
-    count => undef,
     pager => undef,
     attrs => $attrs
   };
@@ -538,8 +544,8 @@ sub find {
       : $self->_add_alias($input_query, $alias);
   }
 
-  # Run the query
-  my $rs = $self->search ($query, $attrs);
+  # Run the query, passing the result_class since it should propagate for find
+  my $rs = $self->search ($query, {result_class => $self->result_class, %$attrs});
   if ($rs->_resolved_attrs->{collapse}) {
     my $row = $rs->next;
     carp "Query returned more than one row" if $rs->next;
@@ -1143,9 +1149,14 @@ in the original source class will not run.
 sub result_class {
   my ($self, $result_class) = @_;
   if ($result_class) {
-    $self->ensure_class_loaded($result_class);
+    unless (ref $result_class) { # don't fire this for an object
+      $self->ensure_class_loaded($result_class);
+    }
     $self->_result_class($result_class);
-    $self->{attrs}{result_class} = $result_class if ref $self;
+    # THIS LINE WOULD BE A BUG - this accessor specifically exists to
+    # permit the user to set result class on one result set only; it only
+    # chains if provided to search()
+    #$self->{attrs}{result_class} = $result_class if ref $self;
   }
   $self->_result_class;
 }
@@ -1241,12 +1252,11 @@ sub _count_rs {
   $attrs ||= $self->_resolved_attrs;
 
   my $tmp_attrs = { %$attrs };
-
-  # take off any limits, record_filter is cdbi, and no point of ordering a count
-  delete $tmp_attrs->{$_} for (qw/select as rows offset order_by record_filter/);
+  # take off any limits, record_filter is cdbi, and no point of ordering nor locking a count
+  delete @{$tmp_attrs}{qw/rows offset order_by record_filter for/};
 
   # overwrite the selector (supplied by the storage)
-  $tmp_attrs->{select} = $rsrc->storage->_count_select ($rsrc, $tmp_attrs);
+  $tmp_attrs->{select} = $rsrc->storage->_count_select ($rsrc, $attrs);
   $tmp_attrs->{as} = 'count';
 
   my $tmp_rs = $rsrc->resultset_class->new($rsrc, $tmp_attrs)->get_column ('count');
@@ -1261,12 +1271,11 @@ sub _count_subq_rs {
   my ($self, $attrs) = @_;
 
   my $rsrc = $self->result_source;
-  $attrs ||= $self->_resolved_attrs_copy;
+  $attrs ||= $self->_resolved_attrs;
 
   my $sub_attrs = { %$attrs };
-
-  # extra selectors do not go in the subquery and there is no point of ordering it
-  delete $sub_attrs->{$_} for qw/collapse select _prefetch_select as order_by/;
+  # extra selectors do not go in the subquery and there is no point of ordering it, nor locking it
+  delete @{$sub_attrs}{qw/collapse select _prefetch_select as order_by for/};
 
   # if we multi-prefetch we group_by primary keys only as this is what we would
   # get out of the rs via ->next/->all. We *DO WANT* to clobber old group_by regardless
@@ -1274,24 +1283,42 @@ sub _count_subq_rs {
     $sub_attrs->{group_by} = [ map { "$attrs->{alias}.$_" } ($rsrc->primary_columns) ]
   }
 
-  $sub_attrs->{select} = $rsrc->storage->_subq_count_select ($rsrc, $attrs);
+  # Calculate subquery selector
+  if (my $g = $sub_attrs->{group_by}) {
 
-  # this is so that the query can be simplified e.g.
-  # * ordering can be thrown away in things like Top limit
-  $sub_attrs->{-for_count_only} = 1;
+    my $sql_maker = $rsrc->storage->sql_maker;
 
-  my $sub_rs = $rsrc->resultset_class->new ($rsrc, $sub_attrs);
+    # necessary as the group_by may refer to aliased functions
+    my $sel_index;
+    for my $sel (@{$attrs->{select}}) {
+      $sel_index->{$sel->{-as}} = $sel
+        if (ref $sel eq 'HASH' and $sel->{-as});
+    }
 
-  $attrs->{from} = [{
-    -alias => 'count_subq',
-    -source_handle => $rsrc->handle,
-    count_subq => $sub_rs->as_query,
-  }];
+    for my $g_part (@$g) {
+      my $colpiece = $sel_index->{$g_part} || $g_part;
 
-  # the subquery replaces this
-  delete $attrs->{$_} for qw/where bind collapse group_by having having_bind rows offset/;
+      # disqualify join-based group_by's. Arcane but possible query
+      # also horrible horrible hack to alias a column (not a func.)
+      # (probably need to introduce SQLA syntax)
+      if ($colpiece =~ /\./ && $colpiece !~ /^$attrs->{alias}\./) {
+        my $as = $colpiece;
+        $as =~ s/\./__/;
+        $colpiece = \ sprintf ('%s AS %s', map { $sql_maker->_quote ($_) } ($colpiece, $as) );
+      }
+      push @{$sub_attrs->{select}}, $colpiece;
+    }
+  }
+  else {
+    my @pcols = map { "$attrs->{alias}.$_" } ($rsrc->primary_columns);
+    $sub_attrs->{select} = @pcols ? \@pcols : [ 1 ];
+  }
 
-  return $self->_count_rs ($attrs);
+  return $rsrc->resultset_class
+               ->new ($rsrc, $sub_attrs)
+                ->as_subselect_rs
+                 ->search ({}, { columns => { count => $rsrc->storage->_count_select ($rsrc, $attrs) } })
+                  ->get_column ('count');
 }
 
 sub _bool {
@@ -1422,14 +1449,15 @@ sub _rs_update_delete {
   my $cond = $rsrc->schema->storage->_strip_cond_qualifiers ($self->{cond});
 
   my $needs_group_by_subq = $self->_has_resolved_attr (qw/collapse group_by -join/);
-  my $needs_subq = $needs_group_by_subq || (not defined $cond) || $self->_has_resolved_attr(qw/row offset/);
+  my $needs_subq = $needs_group_by_subq || (not defined $cond) || $self->_has_resolved_attr(qw/rows offset/);
 
   if ($needs_group_by_subq or $needs_subq) {
 
     # make a new $rs selecting only the PKs (that's all we really need)
     my $attrs = $self->_resolved_attrs_copy;
 
-    delete $attrs->{$_} for qw/collapse select as/;
+
+    delete $attrs->{$_} for qw/collapse _collapse_order_by select _prefetch_select as/;
     $attrs->{columns} = [ map { "$attrs->{alias}.$_" } ($self->result_source->_pri_cols) ];
 
     if ($needs_group_by_subq) {
@@ -1463,7 +1491,6 @@ sub _rs_update_delete {
     }
 
     my $subrs = (ref $self)->new($rsrc, $attrs);
-
     return $self->result_source->storage->_subq_update_delete($subrs, $op, $values);
   }
   else {
@@ -1518,9 +1545,10 @@ sub update_all {
   my ($self, $values) = @_;
   $self->throw_exception('Values for update_all must be a hash')
     unless ref $values eq 'HASH';
-  foreach my $obj ($self->all) {
-    $obj->set_columns($values)->update;
-  }
+
+  my $guard = $self->result_source->schema->txn_scope_guard;
+  $_->update($values) for $self->all;
+  $guard->commit;
   return 1;
 }
 
@@ -1538,7 +1566,7 @@ Deletes the contents of the resultset from its result source. Note that this
 will not run DBIC cascade triggers. See L</delete_all> if you need triggers
 to run. See also L<DBIx::Class::Row/delete>.
 
-Return value will be the amount of rows deleted; exact type of return value
+Return value will be the number of rows deleted; exact type of return value
 is storage-dependent.
 
 =cut
@@ -1571,7 +1599,9 @@ sub delete_all {
   $self->throw_exception('delete_all does not accept any arguments')
     if @_;
 
+  my $guard = $self->result_source->schema->txn_scope_guard;
   $_->delete for $self->all;
+  $guard->commit;
   return 1;
 }
 
@@ -1926,7 +1956,7 @@ sub _is_deterministic_value {
   my $value = shift;
   my $ref_type = ref $value;
   return 1 if $ref_type eq '' || $ref_type eq 'SCALAR';
-  return 1 if Scalar::Util::blessed($value);
+  return 1 if blessed $value;
   return 0;
 }
 
@@ -2173,7 +2203,7 @@ or C<has_one> resultset.  Note Arrayref.
   );
 
 Example of creating a new row and also creating a row in a related
-C<belongs_to>resultset. Note Hashref.
+C<belongs_to> resultset. Note Hashref.
 
   $cd_rs->create({
     title=>"Music for Silly Walks",
@@ -2300,7 +2330,7 @@ For example:
     producer => $producer,
     name => 'harry',
   }, {
-    key => 'primary,
+    key => 'primary',
   });
 
 
@@ -2670,16 +2700,26 @@ but because we isolated the group by into a subselect the above works.
 =cut
 
 sub as_subselect_rs {
-   my $self = shift;
+  my $self = shift;
 
-   return $self->result_source->resultset->search( undef, {
-      alias => $self->current_source_alias,
-      from => [{
-            $self->current_source_alias => $self->as_query,
-            -alias         => $self->current_source_alias,
-            -source_handle => $self->result_source->handle,
-         }]
-   });
+  my $attrs = $self->_resolved_attrs;
+
+  my $fresh_rs = (ref $self)->new (
+    $self->result_source
+  );
+
+  # these pieces will be locked in the subquery
+  delete $fresh_rs->{cond};
+  delete @{$fresh_rs->{attrs}}{qw/where bind/};
+
+  return $fresh_rs->search( {}, {
+    from => [{
+      $attrs->{alias} => $self->as_query,
+      -alias         => $attrs->{alias},
+      -source_handle => $self->result_source->handle,
+    }],
+    alias => $attrs->{alias},
+  });
 }
 
 # This code is called by search_related, and makes sure there
@@ -2704,7 +2744,7 @@ sub _chain_relationship {
   # ->_resolve_join as otherwise they get lost - captainL
   my $join = $self->_merge_attr( $attrs->{join}, $attrs->{prefetch} );
 
-  delete @{$attrs}{qw/join prefetch collapse distinct select as columns +select +as +columns/};
+  delete @{$attrs}{qw/join prefetch collapse group_by distinct select as columns +select +as +columns/};
 
   my $seen = { %{ (delete $attrs->{seen_join}) || {} } };
 
@@ -2730,7 +2770,7 @@ sub _chain_relationship {
       -alias => $attrs->{alias},
       $attrs->{alias} => $rs_copy->as_query,
     }];
-    delete @{$attrs}{@force_subq_attrs, 'where'};
+    delete @{$attrs}{@force_subq_attrs, qw/where bind/};
     $seen->{-relation_chain_depth} = 0;
   }
   elsif ($attrs->{from}) {  #shallow copy suffices
@@ -3298,23 +3338,27 @@ names:
     select => [
       'name',
       { count => 'employeeid' },
-      { sum => 'salary' }
+      { max => { length => 'name' }, -as => 'longest_name' }
     ]
   });
 
-When you use function/stored procedure names and do not supply an C<as>
-attribute, the column names returned are storage-dependent. E.g. MySQL would
-return a column named C<count(employeeid)> in the above example.
+  # Equivalent SQL
+  SELECT name, COUNT( employeeid ), MAX( LENGTH( name ) ) AS longest_name FROM employee
 
-B<NOTE:> You will almost always need a corresponding 'as' entry when you use
-'select'.
+B<NOTE:> You will almost always need a corresponding L</as> attribute when you
+use L</select>, to instruct DBIx::Class how to store the result of the column.
+Also note that the L</as> attribute has nothing to do with the SQL-side 'AS'
+identifier aliasing. You can however alias a function, so you can use it in
+e.g. an C<ORDER BY> clause. This is done via the C<-as> B<select function
+attribute> supplied as shown in the example above.
 
 =head2 +select
 
 =over 4
 
 Indicates additional columns to be selected from storage.  Works the same as
-L</select> but adds columns to the selection.
+L</select> but adds columns to the default selection, instead of specifying
+an explicit list.
 
 =back
 
@@ -3334,24 +3378,25 @@ Indicates additional column names for those added via L</+select>. See L</as>.
 
 =back
 
-Indicates column names for object inflation. That is, C<as>
-indicates the name that the column can be accessed as via the
-C<get_column> method (or via the object accessor, B<if one already
-exists>).  It has nothing to do with the SQL code C<SELECT foo AS bar>.
-
-The C<as> attribute is used in conjunction with C<select>,
-usually when C<select> contains one or more function or stored
-procedure names:
+Indicates column names for object inflation. That is L</as> indicates the
+slot name in which the column value will be stored within the
+L<Row|DBIx::Class::Row> object. The value will then be accessible via this
+identifier by the C<get_column> method (or via the object accessor B<if one
+with the same name already exists>) as shown below. The L</as> attribute has
+B<nothing to do> with the SQL-side C<AS>. See L</select> for details.
 
   $rs = $schema->resultset('Employee')->search(undef, {
     select => [
       'name',
-      { count => 'employeeid' }
+      { count => 'employeeid' },
+      { max => { length => 'name' }, -as => 'longest_name' }
     ],
-    as => ['name', 'employee_count'],
+    as => [qw/
+      name
+      employee_count
+      max_name_length
+    /],
   });
-
-  my $employee = $rs->first(); # get the first Employee
 
 If the object against which the search is performed already has an accessor
 matching a column name specified in C<as>, the value can be retrieved using
@@ -3366,16 +3411,6 @@ use C<get_column> instead:
 
 You can create your own accessors if required - see
 L<DBIx::Class::Manual::Cookbook> for details.
-
-Please note: This will NOT insert an C<AS employee_count> into the SQL
-statement produced, it is used for internal access only. Thus
-attempting to use the accessor in an C<order_by> clause or similar
-will fail miserably.
-
-To get around this limitation, you can supply literal SQL to your
-C<select> attribute that contains the C<AS alias> text, e.g.
-
-  select => [\'myfield AS alias']
 
 =head2 join
 

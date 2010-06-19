@@ -1,8 +1,7 @@
 -- 
 -- Created by SQL::Translator::Producer::SQLite
--- Created on Sat Jan 30 19:18:55 2010
+-- Created on Thu Jun  3 11:52:50 2010
 -- 
-;
 
 --
 -- Table: artist
@@ -10,7 +9,7 @@
 CREATE TABLE artist (
   artistid INTEGER PRIMARY KEY NOT NULL,
   name varchar(100),
-  rank integer NOT NULL DEFAULT '13',
+  rank integer NOT NULL DEFAULT 13,
   charfield char(10)
 );
 
@@ -35,18 +34,6 @@ CREATE TABLE collection (
 );
 
 --
--- Table: employee
---
-CREATE TABLE employee (
-  employee_id INTEGER PRIMARY KEY NOT NULL,
-  position integer NOT NULL,
-  group_id integer,
-  group_id_2 integer,
-  group_id_3 integer,
-  name varchar(100)
-);
-
---
 -- Table: encoded
 --
 CREATE TABLE encoded (
@@ -59,7 +46,7 @@ CREATE TABLE encoded (
 --
 CREATE TABLE event (
   id INTEGER PRIMARY KEY NOT NULL,
-  starts_at datetime NOT NULL,
+  starts_at date NOT NULL,
   created_on timestamp NOT NULL,
   varchar_date varchar(20),
   varchar_datetime varchar(20),
@@ -181,6 +168,14 @@ CREATE TABLE serialized (
 );
 
 --
+-- Table: timestamp_primary_key_test
+--
+CREATE TABLE timestamp_primary_key_test (
+  id timestamp NOT NULL DEFAULT current_timestamp,
+  PRIMARY KEY (id)
+);
+
+--
 -- Table: treelike
 --
 CREATE TABLE treelike (
@@ -251,6 +246,23 @@ CREATE TABLE books (
 );
 
 CREATE INDEX books_idx_owner ON books (owner);
+
+CREATE UNIQUE INDEX books_title ON books (title);
+
+--
+-- Table: employee
+--
+CREATE TABLE employee (
+  employee_id INTEGER PRIMARY KEY NOT NULL,
+  position integer NOT NULL,
+  group_id integer,
+  group_id_2 integer,
+  group_id_3 integer,
+  name varchar(100),
+  encoded integer
+);
+
+CREATE INDEX employee_idx_encoded ON employee (encoded);
 
 --
 -- Table: forceforeign
@@ -445,4 +457,4 @@ CREATE INDEX fourkeys_to_twokeys_idx_t_artist_t_cd ON fourkeys_to_twokeys (t_art
 -- View: year2000cds
 --
 CREATE VIEW year2000cds AS
-    SELECT cdid, artist, title, year, genreid, single_track FROM cd WHERE year = "2000"
+    SELECT cdid, artist, title, year, genreid, single_track FROM cd WHERE year = "2000";

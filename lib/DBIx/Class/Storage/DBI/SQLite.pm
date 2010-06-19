@@ -10,6 +10,8 @@ use POSIX 'strftime';
 use File::Copy;
 use File::Spec;
 
+__PACKAGE__->sql_maker_class('DBIx::Class::SQLAHacks::SQLite');
+
 sub backup
 {
   my ($self, $dir) = @_;
@@ -43,22 +45,48 @@ sub backup
 }
 
 sub deployment_statements {
-  my $self = shift;;
+  my $self = shift;
   my ($schema, $type, $version, $dir, $sqltargs, @rest) = @_;
 
   $sqltargs ||= {};
 
-  my $sqlite_version = $self->_get_dbh->{sqlite_version};
-
-  # numify, SQLT does a numeric comparison
-  $sqlite_version =~ s/^(\d+) \. (\d+) (?: \. (\d+))? .*/${1}.${2}/x;
-
-  $sqltargs->{producer_args}{sqlite_version} = $sqlite_version;
+  if (
+    ! exists $sqltargs->{producer_args}{sqlite_version}
+      and
+    my $dver = $self->_server_info->{normalized_dbms_version}
+  ) {
+    $sqltargs->{producer_args}{sqlite_version} = $dver;
+  }
 
   $self->next::method($schema, $type, $version, $dir, $sqltargs, @rest);
 }
 
 sub datetime_parser_type { return "DateTime::Format::SQLite"; } 
+
+=head2 connect_call_use_foreign_keys
+
+Used as:
+
+    on_connect_call => 'use_foreign_keys'
+
+In L<connect_info|DBIx::Class::Storage::DBI/connect_info> to turn on foreign key
+(including cascading) support for recent versions of SQLite and L<DBD::SQLite>.
+
+Executes:
+
+  PRAGMA foreign_keys = ON 
+
+See L<http://www.sqlite.org/foreignkeys.html> for more information.
+
+=cut
+
+sub connect_call_use_foreign_keys {
+  my $self = shift;
+
+  $self->_do_query(
+    'PRAGMA foreign_keys = ON'
+  );
+}
 
 1;
 

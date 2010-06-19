@@ -1,7 +1,136 @@
 Revision history for DBIx::Class
 
+    * Fixes
+        - Fixed rels ending with me breaking subqueried limit realiasing
+
+    * Misc
+        - Makefile.PL no longer imports GetOptions() to interoperate better
+          with Catalyst installers
+
+0.08123 2010-06-12 14:46 (UTC)
+    * Fixes
+        - Make sure Oracle identifier shortener applies to auto-generated
+          column names, so we stay within the 30-char limit (RT#58271)
+        - Oracle sequence detection now works across schemas
+        - Fix a Storage/$dbh leak introduced by the migration to
+          Try::Tiny (this is *not* a Try::Tiny bug)
+        - Fix corner case of count with group-by over a 1:1 join column
+          where the selector ends up with column name clashes
+        - POD fixes (RT#58247)
+
+    * Misc
+        - Test suite default on-disk database now checks for Win32
+          fail-conditions even when running on other OSes
+
+0.08122 2010-06-03 17:41 (UTC)
+    * New Features
+        - Add DBIx::Class::FilterColumn for non-ref filtering
+        - ::Storage::DBI now correctly preserves a parent $dbh from
+          terminating children, even during interpreter-global
+          out-of-order destruction
+        - dbicadmin supports an -I option with the same semantics as
+          perl itself
+        - InflateColumn::DateTime support for MSSQL via DBD::Sybase
+        - Millisecond precision support for MSSQL datetimes for
+          InflateColumn::DateTime
+        - Oracle-specific hierarchical query syntax support:
+          CONNECT BY (NOCYCLE) / START WITH / ORDER SIBLINGS BY
+        - Support connecting using $ENV{DBI_DSN} and $ENV{DBI_DRIVER}
+        - current_source_alias method on ResultSet objects to
+          determine the alias to use in programatically assembled
+          search()es (originally added in 0.08100 but unmentioned)
+        - Rewrite/unification of all subselecting limit emulations
+          (RNO, Top, RowNum) to be much more robust wrt complex joined
+          resultsets
+        - MSSQL limits now don't require nearly as many applications of
+          the unsafe_subselect_ok attribute, due to optimized queries
+        - Support for Generic Subquery limit "emulation" - awfully slow
+          and inefficient but works on almost any db, and is preferred
+          to software limit emulation
+        - Sybase ASE driver now uses SET ROWCOUNT where possible, and
+          Generic Subquery otherwise for limit support instead of always
+          using software limit emulation
+        - create_ddl_dir (and derivatives) now attempt to create the given
+          $ddl_dir if it does not already exist
+        - deployment_statements now automatically supplies the current RDBMS
+          version to SQLT producer_args for MySQL, Pg, SQLite and Oracle
+
+    * Fixes
+        - Fix nasty potentially data-eating bug when deleting/updating
+          a limited resultset
+        - Fix find() to use result_class set on object
+        - Fix result_class setter behaviour to not mistakenly stuff attrs.
+        - Don't try and ensure_class_loaded an object. This doesn't work.
+        - Fix as_subselect_rs to not inject resultset class-wide where
+          conditions outside of the resulting subquery
+        - Fix count() failing with {for} resultset attribute (RT#56257)
+        - Fixed incorrect detection of Limit dialect on unconnected $schema
+        - update() on row not in_storage no longer throws an exception
+          if there are no dirty columns to update (fixes cascaded update
+          annoyances)
+        - update()/delete() on prefetching resultsets no longer results
+          in malformed SQL (some $rs attributes were erroneously left in)
+        - Fix dbicadmin to allow deploy() on non-versioned schema
+        - Fix dbicadmin to respect sql_dir on upgrade() (RT#57732)
+        - Update Schema::Versioned to respect hashref style of
+          connection_info
+        - Do not recreate the same related object twice during MultiCreate
+          (solves the problem of orphaned IC::FS files)
+        - Fully qualify xp_msver selector when using DBD::Sybase with
+          MSSQL (RT#57467)
+        - Fix ::DBI::Storage to always be able to present a full set of
+          connect() attributes to e.g. Schema::Versioned
+        - Fix Oracle auto-inc trigger detection of "INSERT OR UPDATE"-type
+          triggers
+
+    * Misc
+        - Reformatted Changelog \o/
+        - DBIC goes git://git.shadowcat.co.uk/dbsrgits/DBIx-Class.git
+        - Allow developers to skip optional dependency forcing when working
+          from a checkout
+        - Add a warning to load_namespaces if a class in ResultSet/ is not
+          a subclass of DBIx::Class::ResultSet
+        - All DBIC exception-handling switched to Try::Tiny
+        - All DBIC modules are now free of imports via namespace::clean
+        - Depend on optimized SQL::Abstract (faster SQL generation)
+        - Depend on new Class::Accessor::Grouped reintroducing optional use
+          of Class::XSAccessor (just install C::XSA and get lightning fast
+          column accessors)
+
+0.08121 2010-04-11 18:43:00 (UTC)
+        - Support for Firebird RDBMS with DBD::InterBase and ODBC
+        - Add core support for INSERT RETURNING (for storages that
+          supports this syntax, currently PostgreSQL and Firebird)
+        - Fix spurious warnings on multiple UTF8Columns component loads
+        - DBIx::Class::UTF8Columns entered deprecated state
+        - DBIx::Class::InflateColumn::File entered deprecated state
+        - DBIx::Class::Optional::Dependencies left experimental state
+        - Add req_group_list to Opt::Deps (RT#55211)
+        - Add support for mysql-specific STRAIGHT_JOIN (RT#55579)
+        - Cascading delete/update are now wrapped in a transaction
+          for atomicity
+        - Fix accidental autovivification of ENV vars
+        - Fix update_all and delete_all to be wrapped in a transaction
+        - Fix multiple deficiencies when using MultiCreate with
+          data-encoder components (e.g. ::EncodedColumn)
+        - Fix regression where SQL files with comments were not
+          handled properly by ::Schema::Versioned.
         - Fix regression on not properly throwing when $obj->relationship
           is unresolvable
+        - Fix the join-optimiser to consider unqualified column names
+          whenever possible
+        - Fix an issue with multiple same-table joins confusing the join
+          optimizier
+        - Add has_relationship method to row objects
+        - Fix regression in set_column on PK-less objects
+        - Better error text on malformed/missing relationships
+        - Add POD about the significance of PK columns
+        - Fix for SQLite to ignore the (unsupported) { for => ... }
+          attribute
+        - Fix ambiguity in default directory handling of create_ddl_dir
+          (RT#54063)
+        - Support add_columns('+colname' => { ... }) to augment column
+          definitions.
 
 0.08120 2010-02-24 08:58:00 (UTC)
         - Make sure possibly overwritten deployment_statements methods in

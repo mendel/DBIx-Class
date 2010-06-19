@@ -32,7 +32,6 @@ my $reqs = {
   replicated => {
     req => {
       %$moose_basic,
-      'namespace::clean'          => '0.11',
       'Hash::Merge'               => '0.12',
     },
     pod => {
@@ -66,7 +65,7 @@ my $reqs = {
 
   deploy => {
     req => {
-      'SQL::Translator'           => '0.11005',
+      'SQL::Translator'           => '0.11006',
     },
     pod => {
       title => 'Storage::DBI::deploy()',
@@ -90,13 +89,13 @@ my $reqs = {
 
   test_notabs => {
     req => {
-      #'Test::NoTabs'              => '0.9',
+      'Test::NoTabs'              => '0.9',
     },
   },
 
   test_eol => {
     req => {
-      #'Test::EOL'                 => '0.6',
+      'Test::EOL'                 => '0.6',
     },
   },
 
@@ -176,7 +175,7 @@ my $reqs = {
 
   rdbms_asa => {
     req => {
-      (scalar grep $_, @ENV{qw/DBICTEST_SYBASE_ASA_DSN DBICTEST_SYBASE_ASA_ODBC_DSN/})
+      (scalar grep { $ENV{$_} } (qw/DBICTEST_SYBASE_ASA_DSN DBICTEST_SYBASE_ASA_ODBC_DSN/) )
         ? (
           'DateTime::Format::Strptime' => 0,
         ) : ()
@@ -194,10 +193,6 @@ my $reqs = {
 
 };
 
-
-sub _all_optional_requirements {
-  return { map { %{ $reqs->{$_}{req} || {} } } (keys %$reqs) };
-}
 
 sub req_list_for {
   my ($class, $group) = @_;
@@ -281,14 +276,37 @@ sub _check_deps {
   }
 }
 
-# This is to be called by the author onbly (automatically in Makefile.PL)
+sub req_group_list {
+  return { map { $_ => { %{ $reqs->{$_}{req} || {} } } } (keys %$reqs) };
+}
+
+# This is to be called by the author only (automatically in Makefile.PL)
 sub _gen_pod {
+
   my $class = shift;
   my $modfn = __PACKAGE__ . '.pm';
   $modfn =~ s/\:\:/\//g;
 
-  require DBIx::Class;
-  my $distver = DBIx::Class->VERSION;
+  my $podfn = __FILE__;
+  $podfn =~ s/\.pm$/\.pod/;
+
+  my $distver =
+    eval { require DBIx::Class; DBIx::Class->VERSION; }
+      ||
+    do {
+      warn
+"\n\n---------------------------------------------------------------------\n" .
+'Unable to load core DBIx::Class module to determine current version, '.
+'possibly due to missing dependencies. Author-mode autodocumentation ' .
+"halted\n\n" . $@ .
+"\n\n---------------------------------------------------------------------\n"
+      ;
+      '*UNKNOWN*';  # rv
+    }
+  ;
+
+  my $sqltver = $class->req_list_for ('deploy')->{'SQL::Translator'}
+    or die "Hrmm? No sqlt dep?";
 
   my @chunks = (
     <<"EOC",
@@ -303,10 +321,8 @@ sub _gen_pod {
 EOC
     '=head1 NAME',
     "$class - Optional module dependency specifications (for module authors)",
-    '=head1 SYNOPSIS (EXPERIMENTAL)',
+    '=head1 SYNOPSIS',
     <<EOS,
-B<THE USAGE SHOWN HERE IS EXPERIMENTAL>
-
 Somewhere in your build-file (e.g. L<Module::Install>'s Makefile.PL):
 
   ...
@@ -341,7 +357,7 @@ EOD
     <<'EOD',
 Dependencies are organized in C<groups> and each group can list one or more
 required modules, with an optional minimum version (or 0 for any version).
-The group name can be used in the 
+The group name can be used in the
 EOD
   );
 
@@ -366,6 +382,17 @@ EOD
 
   push @chunks, (
     '=head1 METHODS',
+    '=head2 req_group_list',
+    '=over',
+    '=item Arguments: $none',
+    '=item Returns: \%list_of_requirement_groups',
+    '=back',
+    <<EOD,
+This method should be used by DBIx::Class packagers, to get a hashref of all
+dependencies keyed by dependency group. Each key (group name) can be supplied
+to one of the group-specific methods below.
+EOD
+
     '=head2 req_list_for',
     '=over',
     '=item Arguments: $group_name',
@@ -374,7 +401,7 @@ EOD
     <<EOD,
 This method should be used by DBIx::Class extension authors, to determine the
 version of modules a specific feature requires in the B<current> version of
-DBIx::Class. See the L<SYNOPSIS|/SYNOPSIS (EXPERIMENTAL)> for a real-world
+DBIx::Class. See the L</SYNOPSIS> for a real-world
 example.
 EOD
 
@@ -396,10 +423,10 @@ This method would normally be used by DBIx::Class core-module author, to
 indicate to the user that he needs to install specific modules before he will
 be able to use a specific feature.
 
-For example if the requirements for C<replicated> are not available, the
-returned string would look like:
+For example if some of the requirements for C<deploy> are not available,
+the returned string could look like:
 
- Moose >= 0.98, MooseX::Types >= 0.21, namespace::clean (see $class for details)
+ SQL::Translator >= $sqltver (see $class for details)
 
 The author is expected to prepend the necessary text to this message before
 returning the actual error seen by the user.
@@ -420,10 +447,7 @@ EOD
     'You may distribute this code under the same terms as Perl itself',
   );
 
-  my $fn = __FILE__;
-  $fn =~ s/\.pm$/\.pod/;
-
-  open (my $fh, '>', $fn) or croak "Unable to write to $fn: $!";
+  open (my $fh, '>', $podfn) or croak "Unable to write to $podfn: $!";
   print $fh join ("\n\n", @chunks);
   close ($fh);
 }

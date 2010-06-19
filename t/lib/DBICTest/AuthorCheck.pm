@@ -31,7 +31,7 @@ sub _check_author_makefile {
 
   # not using file->stat as it invokes File::stat which in turn breaks stat(_)
   my ($mf_pl_mtime, $mf_mtime, $optdeps_mtime) = ( map
-    { (stat ($root->file ($_)) )[9] }
+    { (stat ($root->file ($_)) )[9] || undef }  # stat returns () on nonexistent files
     (qw|Makefile.PL  Makefile|, $optdeps)
   );
 
@@ -43,15 +43,16 @@ sub _check_author_makefile {
     push @fail_reasons, "Missing ./inc directory";
   }
 
-  if (not $mf_mtime) {
+  if(not $mf_mtime) {
     push @fail_reasons, "Missing ./Makefile";
   }
-  elsif($mf_mtime < $mf_pl_mtime) {
-    push @fail_reasons, "./Makefile.PL is newer than ./Makefile";
-  }
-
-  if ($mf_mtime < $optdeps_mtime) {
-    push @fail_reasons, "./$optdeps is newer than ./Makefile";
+  else {
+    if($mf_mtime < $mf_pl_mtime) {
+      push @fail_reasons, "./Makefile.PL is newer than ./Makefile";
+    }
+    if($mf_mtime < $optdeps_mtime) {
+      push @fail_reasons, "./$optdeps is newer than ./Makefile";
+    }
   }
 
   if (@fail_reasons) {
@@ -65,9 +66,15 @@ sub _check_author_makefile {
 We have a number of reasons to believe that this is a development
 checkout and that you, the user, did not run `perl Makefile.PL`
 before using this code. You absolutely _must_ perform this step,
-and ensure you have all required dependencies present. Not doing
+to ensure you have all required dependencies present. Not doing
 so often results in a lot of wasted time for other contributors
 trying to assit you with spurious "its broken!" problems.
+
+By default DBICs Makefile.PL turns all optional dependenciess into
+*HARD REQUIREMENTS*, in order to make sure that the entire test
+suite is executed, and no tests are skipped due to missing modules.
+If you for some reason need to disable this behavior - supply the
+--skip_author_deps option when running perl Makefile.PL
 
 If you are seeing this message unexpectedly (i.e. you are in fact
 attempting a regular installation be it through CPAN or manually),

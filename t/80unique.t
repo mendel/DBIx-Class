@@ -25,6 +25,11 @@ is_deeply(
   [ qw/primary track_cd_position track_cd_title/ ],
   'Track source has three unique constraints'
 );
+is_deeply(
+  [ sort $schema->source('Tag')->unique_constraint_names ],
+  [ qw/primary tagid_cd tagid_cd_tag tags_tagid_tag tags_tagid_tag_cd/ ],
+  'Tag source has five unique constraints (from add_unique_constraings)'
+);
 
 my $artistid = 1;
 my $title    = 'UNIQUE Constraint';

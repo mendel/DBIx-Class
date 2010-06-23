@@ -6,6 +6,9 @@ Revision history for DBIx::Class
     * Misc
         - Makefile.PL no longer imports GetOptions() to interoperate better
           with Catalyst installers
+	- "add_unique_constraint" throws if called with multiple constraint
+	  definitions
+	- Implemented "add_unique_constraints"
 
 0.08123 2010-06-12 14:46 (UTC)
     * Fixes
